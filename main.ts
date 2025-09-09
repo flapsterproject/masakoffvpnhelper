@@ -5,7 +5,7 @@ const TOKEN = Deno.env.get("BOT_TOKEN")!;
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
-// Source channels (optional)
+// Source channels
 const SOURCE_CHANNELS = ["@TkmRace", "@SERWERSTM1"]; 
 // Target channel
 const TARGET_CHANNEL = "@MasakoffVpn";
@@ -54,7 +54,15 @@ serve(async (req: Request) => {
     text = post.text ?? post.caption ?? "";
   }
 
-  const footer = `\n\n📌 Source: ${fromUsername}`;
+  // --- Footer with source channel/user ---
+  let footer = `\n\n📌 Source: ${fromUsername}`;
+
+  // If @amangeldimasakov sent the message, include original chat/channel
+  if (fromUsername.toLowerCase() === SPECIFIC_USER.toLowerCase()) {
+    // Use chat title if available, otherwise username
+    const chatName = update.message?.chat.title ?? update.message?.chat.username ?? "Private Chat";
+    footer = `\n\n📌 Forwarded from: ${chatName}`;
+  }
 
   // Forward if from source channel or specific user
   if (
@@ -79,6 +87,7 @@ serve(async (req: Request) => {
 
   return new Response("ok");
 });
+
 
 
 
