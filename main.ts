@@ -42,7 +42,9 @@ serve(async (req: Request) => {
 
   if (update.message) {
     const msg = update.message;
-    fromUsername = `@${msg.from?.username}`;
+    fromUsername = msg.forward_from_chat?.username 
+                   ? `@${msg.forward_from_chat.username}`  // if forwarded
+                   : `@${msg.from?.username}`;
     messageId = msg.message_id;
     fromChatId = msg.chat.id;
     text = msg.text ?? "";
@@ -54,20 +56,13 @@ serve(async (req: Request) => {
     text = post.text ?? post.caption ?? "";
   }
 
-  // --- Footer with source channel/user ---
-  let footer = `\n\n📌 Source: ${fromUsername}`;
-
-  // If @amangeldimasakov sent the message, include original chat/channel
-  if (fromUsername.toLowerCase() === SPECIFIC_USER.toLowerCase()) {
-    // Use chat title if available, otherwise username
-    const chatName = update.message?.chat.title ?? update.message?.chat.username ?? "Private Chat";
-    footer = `\n\n📌 Forwarded from: ${chatName}`;
-  }
+  // --- Footer with original channel/username ---
+  const footer = `\n\n📌 Çeşme: ${fromUsername}`;
 
   // Forward if from source channel or specific user
   if (
     SOURCE_CHANNELS.some(c => c.toLowerCase() === fromUsername.toLowerCase()) ||
-    fromUsername.toLowerCase() === SPECIFIC_USER.toLowerCase()
+    (update.message?.from?.username?.toLowerCase() === SPECIFIC_USER.replace("@", "").toLowerCase())
   ) {
     if (text) {
       await fetch(`${TELEGRAM_API}/sendMessage`, {
@@ -87,6 +82,7 @@ serve(async (req: Request) => {
 
   return new Response("ok");
 });
+
 
 
 
