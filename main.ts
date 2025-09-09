@@ -40,7 +40,7 @@ serve(async (req: Request) => {
 
     // Eger çeşme kanallaryň birinden bolsa
     if (SOURCE_CHANNELS.some(c => c.toLowerCase() === channelUsername.toLowerCase())) {
-      const footer = `\n\n📢 Çeşme: ${channelUsername} `;
+      const footer = `\n\n📌 Çeşme: ${channelUsername} `;
 
       // Tekst ýa-da caption bar bolsa → täzeden iberýär + ýazgy goşýar
       if (post.text || post.caption) {
