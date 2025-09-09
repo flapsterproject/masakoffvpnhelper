@@ -6,7 +6,7 @@ const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
 // Çeşme kanallaryň sanawy (isleseň goşup bolýar)
-const SOURCE_CHANNELS = ["@TkmRace", "@AnotherChannel"]; 
+const SOURCE_CHANNELS = ["@TkmRace", "@vpnbalkan"]; 
 // Hemme habarlary iberjek maksat kanal
 const TARGET_CHANNEL = "@MasakoffVpn";
 
