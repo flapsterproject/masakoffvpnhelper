@@ -5,59 +5,72 @@ const TOKEN = Deno.env.get("BOT_TOKEN")!;
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
-// Çeşme kanallaryň sanawy (isleseň goşup bolýar)
-const SOURCE_CHANNELS = ["@TkmRace", "@SERWERSTM1"]; 
-// Hemme habarlary iberjek maksat kanal
+// Public channels (without @ in URL)
+const SOURCE_CHANNELS = ["TkmRace", "SERWERSTM1"];
 const TARGET_CHANNEL = "@MasakoffVpn";
 
-// --- Köçürmek (aşagyna ýazgy goşmak bilen) ---
-async function copyMessageWithFooter(fromChat: string, messageId: number, toChat: string, footer: string) {
-  await fetch(`${TELEGRAM_API}/copyMessage`, {
+// Keep track of last forwarded posts to avoid duplicates
+const lastMessages: Record<string, string> = {};
+
+// Helper: strip HTML tags
+function stripHtml(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+// Fetch last post from public channel
+async function fetchLastPost(channel: string): Promise<{ id: string; text: string } | null> {
+  try {
+    const res = await fetch(`https://t.me/s/${channel}`);
+    const html = await res.text();
+
+    const matches = [...html.matchAll(/<div class="tgme_widget_message"[^>]*data-post="([^"]+)"[^>]*>([\s\S]*?)<\/div>/g)];
+    if (matches.length === 0) return null;
+
+    const last = matches[matches.length - 1];
+    const postId = last[1];
+    const textMatch = last[2].match(/<div class="tgme_widget_message_text js-message_text"[^>]*>([\s\S]*?)<\/div>/);
+
+    const text = textMatch ? stripHtml(textMatch[1]) : null;
+    if (!text) return null; // skip media-only posts
+
+    return { id: postId, text };
+  } catch (e) {
+    console.error("Fetch error:", e);
+    return null;
+  }
+}
+
+// Send message to target channel with footer
+async function sendToTargetChannel(text: string, source: string) {
+  const footer = `\n\n📌 Çeşme: @${source}`;
+  await fetch(`${TELEGRAM_API}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      chat_id: toChat,
-      from_chat_id: fromChat,
-      message_id: messageId,
-      caption: footer,  // diňe surat/wideo bolsa aşagyna ýazgy goýýar
-      parse_mode: "HTML"
+      chat_id: TARGET_CHANNEL,
+      text: text + footer,
+      parse_mode: "HTML",
     }),
   });
 }
 
-// --- Webhook hyzmatkär ---
+// Webhook handler
 serve(async (req: Request) => {
   if (new URL(req.url).pathname !== SECRET_PATH) {
-    return new Response("Tapylmady", { status: 404 });
+    return new Response("Not Found", { status: 404 });
   }
 
-  const update = await req.json();
-
-  // Eger kanal habary bolsa
-  if (update.channel_post) {
-    const post = update.channel_post;
-    const channelUsername = `@${post.chat?.username}`;
-
-    // Eger çeşme kanallaryň birinden bolsa
-    if (SOURCE_CHANNELS.some(c => c.toLowerCase() === channelUsername.toLowerCase())) {
-      const footer = `\n\n📌 Çeşme: ${channelUsername} `;
-
-      // Tekst ýa-da caption bar bolsa → täzeden iberýär + ýazgy goşýar
-      if (post.text || post.caption) {
-        const text = (post.text ?? post.caption ?? "") + footer;
-        await fetch(`${TELEGRAM_API}/sendMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: TARGET_CHANNEL,
-            text,
-            parse_mode: "HTML"
-          }),
-        });
-      } else {
-        // Diňe media (surat/wideo) bolsa → copyMessage ulanyp ýazgy goşýar
-        await copyMessageWithFooter(channelUsername, post.message_id, TARGET_CHANNEL, footer);
-      }
+  for (const ch of SOURCE_CHANNELS) {
+    const post = await fetchLastPost(ch);
+    if (post && lastMessages[ch] !== post.id) {
+      lastMessages[ch] = post.id; // mark as forwarded
+      await sendToTargetChannel(post.text, ch);
+      console.log(`Forwarded post from @${ch}`);
     }
   }
 
