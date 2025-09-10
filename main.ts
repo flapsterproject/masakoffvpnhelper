@@ -1,18 +1,16 @@
 // main.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
-const supabase = createClient(
-  "https://ogaeqaxntvdkzmbjigtq.supabase.co",
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9nYWVxYXhudHZka3ptYmppZ3RxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc0OTgyODMsImV4cCI6MjA3MzA3NDI4M30.gfRMqvtWUd-swvYCr0nJOgY2HDLlDLcn2Aet1rEuADs"
-);
+// In-memory DB
+const profiles: Record<string, { trophies: number; wins: number; losses: number }> = {};
 
-let queue: string[] = [];
-const battles: Record<string, any> = {};
+// Battle matchmaking state
+let queue: string[] = []; // users waiting
+const battles: Record<string, any> = {}; // chatId -> battle state
 
 async function sendMessage(chatId: string, text: string, options: any = {}) {
   const res = await fetch(`${API}/sendMessage`, {
@@ -40,32 +38,12 @@ async function answerCallbackQuery(id: string, text = "") {
   });
 }
 
-// Supabase functions
-async function initProfile(userId: string) {
-  const { data } = await supabase.from("profiles").select("*").eq("user_id", userId).single();
-  if (!data) {
-    await supabase.from("profiles").insert([{ user_id: userId }]);
+function initProfile(userId: string) {
+  if (!profiles[userId]) {
+    profiles[userId] = { trophies: 0, wins: 0, losses: 0 };
   }
 }
 
-async function updateWin(userId: string) {
-  await supabase.from("profiles")
-    .update({ wins: supabase.raw('wins + 1'), trophies: supabase.raw('trophies + 1') })
-    .eq("user_id", userId);
-}
-
-async function updateLoss(userId: string) {
-  await supabase.from("profiles")
-    .update({ losses: supabase.raw('losses + 1') })
-    .eq("user_id", userId);
-}
-
-async function getProfile(userId: string) {
-  const { data } = await supabase.from("profiles").select("*").eq("user_id", userId).single();
-  return data;
-}
-
-// Battle logic
 async function startBattle(p1: string, p2: string) {
   const battle = {
     players: [p1, p2],
@@ -81,7 +59,9 @@ async function startBattle(p1: string, p2: string) {
   await sendMessage(p1, `Opponent found! Battle vs ${p2}`);
   await sendMessage(p2, `Opponent found! Battle vs ${p1}`);
 
-  battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 300000); // 5 minutes
+  // idle timer for 5 minutes (300000 ms)
+  battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 300000);
+
   nextRound(battle);
 }
 
@@ -102,14 +82,16 @@ async function nextRound(battle: any) {
     if (msgId) battle.choiceMsgs[player] = msgId;
   }
 
-  battle.timeoutId = setTimeout(() => resolveRound(battle), 30000); // 30 seconds
+  battle.timeoutId = setTimeout(() => resolveRound(battle), 30000);
 }
 
 function winner(move1: string, move2: string): number {
   if (move1 === move2) return 0;
-  if ((move1 === "rock" && move2 === "scissors") ||
-      (move1 === "scissors" && move2 === "paper") ||
-      (move1 === "paper" && move2 === "rock")) return 1;
+  if (
+    (move1 === "rock" && move2 === "scissors") ||
+    (move1 === "scissors" && move2 === "paper") ||
+    (move1 === "paper" && move2 === "rock")
+  ) return 1;
   return -1;
 }
 
@@ -117,8 +99,10 @@ async function resolveRound(battle: any) {
   clearTimeout(battle.timeoutId);
 
   for (const p of battle.players) {
-    if (!battle.choices[p]) battle.choices[p] = "rock";
-    if (battle.choiceMsgs[p]) await deleteMessage(p, battle.choiceMsgs[p]);
+    if (!battle.choices[p]) battle.choices[p] = "rock"; // default
+    if (battle.choiceMsgs[p]) {
+      await deleteMessage(p, battle.choiceMsgs[p]);
+    }
   }
 
   const [p1, p2] = battle.players;
@@ -135,11 +119,12 @@ async function resolveRound(battle: any) {
     const winnerId = battle.scores[p1] === 3 ? p1 : p2;
     const loserId = winnerId === p1 ? p2 : p1;
 
-    await initProfile(winnerId);
-    await initProfile(loserId);
+    initProfile(winnerId);
+    initProfile(loserId);
 
-    await updateWin(winnerId);
-    await updateLoss(loserId);
+    profiles[winnerId].wins++;
+    profiles[winnerId].trophies += 1; // give 1 trophy
+    profiles[loserId].losses++;
 
     await sendMessage(winnerId, `🎉 You won the battle! 🏆 +1 trophy`);
     await sendMessage(loserId, `😢 You lost the battle.`);
@@ -159,31 +144,6 @@ async function endBattleIdle(battle: any) {
   delete battles[p2];
 }
 
-// Callback query handling
-async function handleCallbackQuery(update: any) {
-  const chatId = String(update.callback_query.message.chat.id);
-  const choice = update.callback_query.data;
-  const battle = battles[chatId];
-
-  if (battle && !battle.choices[chatId]) {
-    // Record player choice
-    battle.choices[chatId] = choice;
-    sendMessage(chatId, `You chose ${choice}`);
-
-    // Reset idle timer for 5 minutes
-    clearTimeout(battle.idleTimerId);
-    battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 300000);
-
-    // If both players have chosen, resolve immediately
-    if (battle.choices[battle.players[0]] && battle.choices[battle.players[1]]) {
-      resolveRound(battle);
-    }
-  }
-
-  // Always answer callback query so buttons respond
-  await answerCallbackQuery(update.callback_query.id);
-}
-
 serve(async (req) => {
   const update = await req.json();
 
@@ -192,9 +152,12 @@ serve(async (req) => {
     const text = update.message.text;
 
     if (text === "/battle") {
-      if (battles[chatId]) await sendMessage(chatId, "⚔️ You are already in a battle!");
-      else if (queue.includes(chatId)) await sendMessage(chatId, "⌛ You are already searching for an opponent...");
-      else if (queue.length > 0 && queue[0] !== chatId) {
+      // Prevent joining if already in a battle
+      if (battles[chatId]) {
+        await sendMessage(chatId, "⚔️ You are already in a battle!");
+      } else if (queue.includes(chatId)) {
+        await sendMessage(chatId, "⌛ You are already searching for an opponent...");
+      } else if (queue.length > 0 && queue[0] !== chatId) {
         const opponent = queue.shift()!;
         startBattle(chatId, opponent);
       } else {
@@ -204,14 +167,33 @@ serve(async (req) => {
     }
 
     if (text === "/profile") {
-      await initProfile(chatId);
-      const profile = await getProfile(chatId);
-      await sendMessage(chatId, `📊 Profile:\nWins: ${profile.wins}\nLosses: ${profile.losses}\nTrophies: ${profile.trophies}`);
+      initProfile(chatId);
+      const p = profiles[chatId];
+      sendMessage(chatId, `📊 Profile:\nWins: ${p.wins}\nLosses: ${p.losses}\nTrophies: ${p.trophies}`);
     }
   }
 
   if (update.callback_query) {
-    await handleCallbackQuery(update);
+    const chatId = String(update.callback_query.message.chat.id);
+    const choice = update.callback_query.data;
+
+    const battle = battles[chatId];
+    if (battle && !battle.choices[chatId]) {
+      battle.choices[chatId] = choice;
+      sendMessage(chatId, `You chose ${choice}`);
+
+      // Reset idle timer when someone plays
+      clearTimeout(battle.idleTimerId);
+      battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 300000);
+
+      // If both chosen -> resolve immediately
+      if (battle.choices[battle.players[0]] && battle.choices[battle.players[1]]) {
+        resolveRound(battle);
+      }
+    }
+
+    // Always answer callback query to avoid stuck buttons
+    await answerCallbackQuery(update.callback_query.id);
   }
 
   return new Response("ok");
