@@ -30,6 +30,14 @@ async function deleteMessage(chatId: string, messageId: number) {
   });
 }
 
+async function answerCallbackQuery(id: string, text = "") {
+  await fetch(`${API}/answerCallbackQuery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ callback_query_id: id, text }),
+  });
+}
+
 function initProfile(userId: string) {
   if (!profiles[userId]) {
     profiles[userId] = { trophies: 0, wins: 0, losses: 0 };
@@ -183,6 +191,9 @@ serve(async (req) => {
         resolveRound(battle);
       }
     }
+
+    // Always answer callback query to avoid stuck buttons
+    await answerCallbackQuery(update.callback_query.id);
   }
 
   return new Response("ok");
