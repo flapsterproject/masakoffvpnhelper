@@ -1,29 +1,17 @@
 // main.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { DB } from "https://deno.land/x/sqlite/mod.ts";
 
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
-// Initialize SQLite DB
-const db = new DB("rps.db");
+// In-memory DB
+const profiles: Record<string, { trophies: number; wins: number; losses: number }> = {};
 
-// Create profiles table if it doesn't exist
-db.query(`
-  CREATE TABLE IF NOT EXISTS profiles (
-    id TEXT PRIMARY KEY,
-    wins INTEGER DEFAULT 0,
-    losses INTEGER DEFAULT 0,
-    trophies INTEGER DEFAULT 0
-  )
-`);
+// Battle matchmaking state
+let queue: string[] = []; // users waiting
+const battles: Record<string, any> = {}; // chatId -> battle state
 
-// In-memory battle queue & state
-let queue: string[] = [];
-const battles: Record<string, any> = {};
-
-// ===== Telegram helpers =====
 async function sendMessage(chatId: string, text: string, options: any = {}) {
   const res = await fetch(`${API}/sendMessage`, {
     method: "POST",
@@ -50,44 +38,12 @@ async function answerCallbackQuery(id: string, text = "") {
   });
 }
 
-// ===== SQLite profile helpers =====
-function initProfile(id: string) {
-  const existing = [...db.query("SELECT id FROM profiles WHERE id = ?", [id])];
-  if (existing.length === 0) {
-    db.query("INSERT INTO profiles (id, wins, losses, trophies) VALUES (?, 0, 0, 0)", [id]);
+function initProfile(userId: string) {
+  if (!profiles[userId]) {
+    profiles[userId] = { trophies: 0, wins: 0, losses: 0 };
   }
 }
 
-function getProfile(id: string) {
-  const result = [...db.query("SELECT wins, losses, trophies FROM profiles WHERE id = ?", [id])];
-  if (result.length === 0) return { wins: 0, losses: 0, trophies: 0 };
-  const [wins, losses, trophies] = result[0];
-  return { wins, losses, trophies };
-}
-
-function updateProfile(id: string, fields: { wins?: number; losses?: number; trophies?: number }) {
-  const profile = getProfile(id);
-  const wins = fields.wins ?? profile.wins;
-  const losses = fields.losses ?? profile.losses;
-  const trophies = fields.trophies ?? profile.trophies;
-  db.query(
-    "UPDATE profiles SET wins = ?, losses = ?, trophies = ? WHERE id = ?",
-    [wins, losses, trophies, id]
-  );
-}
-
-// ===== Rock-paper-scissors logic =====
-function winner(move1: string, move2: string): number {
-  if (move1 === move2) return 0;
-  if (
-    (move1 === "rock" && move2 === "scissors") ||
-    (move1 === "scissors" && move2 === "paper") ||
-    (move1 === "paper" && move2 === "rock")
-  ) return 1;
-  return -1;
-}
-
-// ===== Battle logic (in-memory) =====
 async function startBattle(p1: string, p2: string) {
   const battle = {
     players: [p1, p2],
@@ -103,7 +59,9 @@ async function startBattle(p1: string, p2: string) {
   await sendMessage(p1, `Opponent found! Battle vs ${p2}`);
   await sendMessage(p2, `Opponent found! Battle vs ${p1}`);
 
+  // idle timer for 5 minutes (300000 ms)
   battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 300000);
+
   nextRound(battle);
 }
 
@@ -125,6 +83,16 @@ async function nextRound(battle: any) {
   }
 
   battle.timeoutId = setTimeout(() => resolveRound(battle), 30000);
+}
+
+function winner(move1: string, move2: string): number {
+  if (move1 === move2) return 0;
+  if (
+    (move1 === "rock" && move2 === "scissors") ||
+    (move1 === "scissors" && move2 === "paper") ||
+    (move1 === "paper" && move2 === "rock")
+  ) return 1;
+  return -1;
 }
 
 async function resolveRound(battle: any) {
@@ -154,16 +122,9 @@ async function resolveRound(battle: any) {
     initProfile(winnerId);
     initProfile(loserId);
 
-    const winnerProfile = getProfile(winnerId);
-    const loserProfile = getProfile(loserId);
-
-    updateProfile(winnerId, {
-      wins: winnerProfile.wins + 1,
-      trophies: winnerProfile.trophies + 1,
-    });
-    updateProfile(loserId, {
-      losses: loserProfile.losses + 1,
-    });
+    profiles[winnerId].wins++;
+    profiles[winnerId].trophies += 1; // give 1 trophy
+    profiles[loserId].losses++;
 
     await sendMessage(winnerId, `🎉 You won the battle! 🏆 +1 trophy`);
     await sendMessage(loserId, `😢 You lost the battle.`);
@@ -183,7 +144,6 @@ async function endBattleIdle(battle: any) {
   delete battles[p2];
 }
 
-// ===== Serve =====
 serve(async (req) => {
   const update = await req.json();
 
@@ -192,6 +152,7 @@ serve(async (req) => {
     const text = update.message.text;
 
     if (text === "/battle") {
+      // Prevent joining if already in a battle
       if (battles[chatId]) {
         await sendMessage(chatId, "⚔️ You are already in a battle!");
       } else if (queue.includes(chatId)) {
@@ -207,7 +168,7 @@ serve(async (req) => {
 
     if (text === "/profile") {
       initProfile(chatId);
-      const p = getProfile(chatId);
+      const p = profiles[chatId];
       sendMessage(chatId, `📊 Profile:\nWins: ${p.wins}\nLosses: ${p.losses}\nTrophies: ${p.trophies}`);
     }
   }
@@ -221,17 +182,19 @@ serve(async (req) => {
       battle.choices[chatId] = choice;
       sendMessage(chatId, `You chose ${choice}`);
 
+      // Reset idle timer when someone plays
       clearTimeout(battle.idleTimerId);
       battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 300000);
 
+      // If both chosen -> resolve immediately
       if (battle.choices[battle.players[0]] && battle.choices[battle.players[1]]) {
         resolveRound(battle);
       }
     }
 
+    // Always answer callback query to avoid stuck buttons
     await answerCallbackQuery(update.callback_query.id);
   }
 
   return new Response("ok");
 });
-
