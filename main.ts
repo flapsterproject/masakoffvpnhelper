@@ -36,10 +36,6 @@ function initProfile(userId: string) {
   }
 }
 
-function getOpponent(battle: any, userId: string) {
-  return battle.players.find((p: string) => p !== userId);
-}
-
 async function startBattle(p1: string, p2: string) {
   const battle = {
     players: [p1, p2],
@@ -47,12 +43,16 @@ async function startBattle(p1: string, p2: string) {
     choices: {} as Record<string, string>,
     choiceMsgs: {} as Record<string, number>,
     timeoutId: 0 as any,
+    idleTimerId: 0 as any,
   };
   battles[p1] = battle;
   battles[p2] = battle;
 
   await sendMessage(p1, `Opponent found! Battle vs ${p2}`);
   await sendMessage(p2, `Opponent found! Battle vs ${p1}`);
+
+  // idle timer for 5 minutes (300000 ms)
+  battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 300000);
 
   nextRound(battle);
 }
@@ -107,6 +107,7 @@ async function resolveRound(battle: any) {
   await sendMessage(p2, `You: ${battle.choices[p2]} | Opponent: ${battle.choices[p1]}\nScore: ${battle.scores[p2]} - ${battle.scores[p1]}`);
 
   if (battle.scores[p1] === 3 || battle.scores[p2] === 3) {
+    clearTimeout(battle.idleTimerId);
     const winnerId = battle.scores[p1] === 3 ? p1 : p2;
     const loserId = winnerId === p1 ? p2 : p1;
 
@@ -125,6 +126,14 @@ async function resolveRound(battle: any) {
   } else {
     nextRound(battle);
   }
+}
+
+async function endBattleIdle(battle: any) {
+  const [p1, p2] = battle.players;
+  await sendMessage(p1, "⚠️ Battle ended due to inactivity (5 minutes, no moves).");
+  await sendMessage(p2, "⚠️ Battle ended due to inactivity (5 minutes, no moves).");
+  delete battles[p1];
+  delete battles[p2];
 }
 
 serve(async (req) => {
@@ -164,6 +173,10 @@ serve(async (req) => {
     if (battle && !battle.choices[chatId]) {
       battle.choices[chatId] = choice;
       sendMessage(chatId, `You chose ${choice}`);
+
+      // Reset idle timer when someone plays
+      clearTimeout(battle.idleTimerId);
+      battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 300000);
 
       // If both chosen -> resolve immediately
       if (battle.choices[battle.players[0]] && battle.choices[battle.players[1]]) {
