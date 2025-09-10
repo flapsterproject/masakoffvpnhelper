@@ -49,7 +49,7 @@ async function startBattle(p1: string, p2: string) {
 async function nextRound(battle: any) {
   battle.choices = {};
   for (const player of battle.players) {
-    await sendMessage(player, "Choose your move (you have 5 sec):", {
+    await sendMessage(player, "Choose your move (you have 30 sec):", {
       reply_markup: {
         inline_keyboard: [[
           { text: "🪨 Rock", callback_data: "rock" },
@@ -60,7 +60,7 @@ async function nextRound(battle: any) {
     });
   }
 
-  setTimeout(() => resolveRound(battle), 5000);
+  setTimeout(() => resolveRound(battle), 30000);
 }
 
 function winner(move1: string, move2: string): number {
@@ -95,10 +95,10 @@ async function resolveRound(battle: any) {
     initProfile(loserId);
 
     profiles[winnerId].wins++;
-    profiles[winnerId].trophies++;
+    profiles[winnerId].trophies += 1; // give 1 trophy
     profiles[loserId].losses++;
 
-    await sendMessage(winnerId, `🎉 You won the battle! +1 trophy`);
+    await sendMessage(winnerId, `🎉 You won the battle! 🏆 +1 trophy`);
     await sendMessage(loserId, `😢 You lost the battle.`);
 
     delete battles[p1];
