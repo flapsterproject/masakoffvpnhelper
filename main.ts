@@ -4,6 +4,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 const API = `https://api.telegram.org/bot${TOKEN}`;
+const SECRET_PATH = "/masakoffvpnhelper";
 
 const supabase = createClient(
   "https://ogaeqaxntvdkzmbjigtq.supabase.co",
