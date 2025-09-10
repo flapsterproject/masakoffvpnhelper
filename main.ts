@@ -1,15 +1,23 @@
 // main.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
+import { DB } from "https://deno.land/x/sqlite/mod.ts";
 
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
-// Supabase client
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_KEY = Deno.env.get("SUPABASE_KEY")!;
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+// Initialize SQLite DB
+const db = new DB("rps.db");
+
+// Create profiles table if it doesn't exist
+db.query(`
+  CREATE TABLE IF NOT EXISTS profiles (
+    id TEXT PRIMARY KEY,
+    wins INTEGER DEFAULT 0,
+    losses INTEGER DEFAULT 0,
+    trophies INTEGER DEFAULT 0
+  )
+`);
 
 // In-memory battle queue & state
 let queue: string[] = [];
@@ -42,21 +50,30 @@ async function answerCallbackQuery(id: string, text = "") {
   });
 }
 
-// ===== Supabase profile helpers =====
-async function initProfile(id: string) {
-  const { data } = await supabase.from("profiles").select("*").eq("id", id).single();
-  if (!data) {
-    await supabase.from("profiles").insert({ id, wins: 0, losses: 0, trophies: 0 });
+// ===== SQLite profile helpers =====
+function initProfile(id: string) {
+  const existing = [...db.query("SELECT id FROM profiles WHERE id = ?", [id])];
+  if (existing.length === 0) {
+    db.query("INSERT INTO profiles (id, wins, losses, trophies) VALUES (?, 0, 0, 0)", [id]);
   }
 }
 
-async function getProfile(id: string) {
-  const { data } = await supabase.from("profiles").select("*").eq("id", id).single();
-  return data;
+function getProfile(id: string) {
+  const result = [...db.query("SELECT wins, losses, trophies FROM profiles WHERE id = ?", [id])];
+  if (result.length === 0) return { wins: 0, losses: 0, trophies: 0 };
+  const [wins, losses, trophies] = result[0];
+  return { wins, losses, trophies };
 }
 
-async function updateProfile(id: string, fields: { wins?: number; losses?: number; trophies?: number }) {
-  await supabase.from("profiles").update(fields).eq("id", id);
+function updateProfile(id: string, fields: { wins?: number; losses?: number; trophies?: number }) {
+  const profile = getProfile(id);
+  const wins = fields.wins ?? profile.wins;
+  const losses = fields.losses ?? profile.losses;
+  const trophies = fields.trophies ?? profile.trophies;
+  db.query(
+    "UPDATE profiles SET wins = ?, losses = ?, trophies = ? WHERE id = ?",
+    [wins, losses, trophies, id]
+  );
 }
 
 // ===== Rock-paper-scissors logic =====
@@ -134,17 +151,17 @@ async function resolveRound(battle: any) {
     const winnerId = battle.scores[p1] === 3 ? p1 : p2;
     const loserId = winnerId === p1 ? p2 : p1;
 
-    await initProfile(winnerId);
-    await initProfile(loserId);
+    initProfile(winnerId);
+    initProfile(loserId);
 
-    const winnerProfile = await getProfile(winnerId);
-    const loserProfile = await getProfile(loserId);
+    const winnerProfile = getProfile(winnerId);
+    const loserProfile = getProfile(loserId);
 
-    await updateProfile(winnerId, {
+    updateProfile(winnerId, {
       wins: winnerProfile.wins + 1,
       trophies: winnerProfile.trophies + 1,
     });
-    await updateProfile(loserId, {
+    updateProfile(loserId, {
       losses: loserProfile.losses + 1,
     });
 
@@ -189,8 +206,8 @@ serve(async (req) => {
     }
 
     if (text === "/profile") {
-      await initProfile(chatId);
-      const p = await getProfile(chatId);
+      initProfile(chatId);
+      const p = getProfile(chatId);
       sendMessage(chatId, `📊 Profile:\nWins: ${p.wins}\nLosses: ${p.losses}\nTrophies: ${p.trophies}`);
     }
   }
@@ -217,3 +234,4 @@ serve(async (req) => {
 
   return new Response("ok");
 });
+
