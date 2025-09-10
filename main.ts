@@ -13,10 +13,20 @@ let queue: string[] = []; // users waiting
 const battles: Record<string, any> = {}; // chatId -> battle state
 
 async function sendMessage(chatId: string, text: string, options: any = {}) {
-  await fetch(`${API}/sendMessage`, {
+  const res = await fetch(`${API}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: chatId, text, ...options }),
+  });
+  const data = await res.json();
+  return data.result?.message_id;
+}
+
+async function deleteMessage(chatId: string, messageId: number) {
+  await fetch(`${API}/deleteMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, message_id: messageId }),
   });
 }
 
@@ -31,11 +41,12 @@ function getOpponent(battle: any, userId: string) {
 }
 
 async function startBattle(p1: string, p2: string) {
-  const battleId = `${p1}_${p2}`;
   const battle = {
     players: [p1, p2],
     scores: { [p1]: 0, [p2]: 0 },
     choices: {} as Record<string, string>,
+    choiceMsgs: {} as Record<string, number>,
+    timeoutId: 0 as any,
   };
   battles[p1] = battle;
   battles[p2] = battle;
@@ -48,8 +59,10 @@ async function startBattle(p1: string, p2: string) {
 
 async function nextRound(battle: any) {
   battle.choices = {};
+  battle.choiceMsgs = {};
+
   for (const player of battle.players) {
-    await sendMessage(player, "Choose your move (you have 30 sec):", {
+    const msgId = await sendMessage(player, "Choose your move (you have 30 sec):", {
       reply_markup: {
         inline_keyboard: [[
           { text: "🪨 Rock", callback_data: "rock" },
@@ -58,9 +71,10 @@ async function nextRound(battle: any) {
         ]],
       },
     });
+    if (msgId) battle.choiceMsgs[player] = msgId;
   }
 
-  setTimeout(() => resolveRound(battle), 30000);
+  battle.timeoutId = setTimeout(() => resolveRound(battle), 30000);
 }
 
 function winner(move1: string, move2: string): number {
@@ -74,8 +88,13 @@ function winner(move1: string, move2: string): number {
 }
 
 async function resolveRound(battle: any) {
+  clearTimeout(battle.timeoutId);
+
   for (const p of battle.players) {
     if (!battle.choices[p]) battle.choices[p] = "rock"; // default
+    if (battle.choiceMsgs[p]) {
+      await deleteMessage(p, battle.choiceMsgs[p]);
+    }
   }
 
   const [p1, p2] = battle.players;
@@ -116,7 +135,12 @@ serve(async (req) => {
     const text = update.message.text;
 
     if (text === "/battle") {
-      if (queue.length > 0 && queue[0] !== chatId) {
+      // Prevent joining if already in a battle
+      if (battles[chatId]) {
+        await sendMessage(chatId, "⚔️ You are already in a battle!");
+      } else if (queue.includes(chatId)) {
+        await sendMessage(chatId, "⌛ You are already searching for an opponent...");
+      } else if (queue.length > 0 && queue[0] !== chatId) {
         const opponent = queue.shift()!;
         startBattle(chatId, opponent);
       } else {
@@ -140,6 +164,11 @@ serve(async (req) => {
     if (battle && !battle.choices[chatId]) {
       battle.choices[chatId] = choice;
       sendMessage(chatId, `You chose ${choice}`);
+
+      // If both chosen -> resolve immediately
+      if (battle.choices[battle.players[0]] && battle.choices[battle.players[1]]) {
+        resolveRound(battle);
+      }
     }
   }
 
