@@ -63,6 +63,36 @@ async function updateProfile(userId: string, delta: { wins?: number; losses?: nu
   await kv.set(["profiles", userId], newProfile);
 }
 
+// -------------------- Leaderboard Helpers --------------------
+async function getLeaderboard(top = 10) {
+  const players: { userId: string; trophies: number; wins: number; losses: number }[] = [];
+
+  for await (const entry of kv.list({ prefix: ["profiles"] })) {
+    const userId = entry.key[1] as string;
+    const value = entry.value as { trophies: number; wins: number; losses: number };
+    players.push({ userId, ...value });
+  }
+
+  players.sort((a, b) => b.trophies - a.trophies);
+
+  return players.slice(0, top);
+}
+
+async function sendLeaderboard(chatId: string) {
+  const topPlayers = await getLeaderboard();
+  if (topPlayers.length === 0) {
+    await sendMessage(chatId, "No players yet!");
+    return;
+  }
+
+  let msg = "🏆 Top Players:\n\n";
+  topPlayers.forEach((p, i) => {
+    msg += `${i + 1}. ${p.userId} — 🏆 ${p.trophies} | Wins: ${p.wins} | Losses: ${p.losses}\n`;
+  });
+
+  await sendMessage(chatId, msg);
+}
+
 // -------------------- Game Logic --------------------
 function winner(move1: string, move2: string): number {
   if (move1 === move2) return 0;
@@ -163,7 +193,6 @@ async function startBattle(p1: string, p2: string) {
   await sendMessage(p1, `Opponent found! Battle vs ${p2}`);
   await sendMessage(p2, `Opponent found! Battle vs ${p1}`);
 
-  // idle timer for 5 minutes
   battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 300000);
 
   nextRound(battle);
@@ -197,6 +226,10 @@ serve(async (req) => {
         const p = await getProfile(chatId);
         sendMessage(chatId, `📊 Profile:\nWins: ${p.wins}\nLosses: ${p.losses}\nTrophies: ${p.trophies}`);
       }
+
+      if (text === "/leaderboard") {
+        await sendLeaderboard(chatId);
+      }
     }
 
     if (update.callback_query) {
@@ -224,3 +257,4 @@ serve(async (req) => {
 
   return new Response("ok");
 });
+
