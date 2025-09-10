@@ -9,6 +9,9 @@ const SECRET_PATH = "/masakoffvpnhelper";
 // Deno KV setup
 const kv = await Deno.openKv();
 
+// Admin username
+const ADMIN_USERNAME = "@amangeldimasakov";
+
 // Battle matchmaking state
 let queue: string[] = []; // users waiting
 const battles: Record<string, any> = {}; // chatId -> battle state
@@ -207,6 +210,30 @@ serve(async (req) => {
       const chatId = String(update.message.chat.id);
       const text = update.message.text;
 
+      // ---------- Admin command ----------
+      if (text?.startsWith("/addtouser")) {
+        const fromUsername = update.message.from.username ? `@${update.message.from.username}` : "";
+        if (fromUsername !== ADMIN_USERNAME) {
+          await sendMessage(chatId, "❌ You are not allowed to use this command.");
+        } else {
+          const parts = text.split(" ");
+          if (parts.length !== 3) {
+            await sendMessage(chatId, "Usage: /addtouser <userid> <amount>");
+          } else {
+            const targetUserId = parts[1];
+            const amount = parseInt(parts[2]);
+            if (isNaN(amount)) {
+              await sendMessage(chatId, "❌ Amount must be a number.");
+            } else {
+              await initProfile(targetUserId);
+              await updateProfile(targetUserId, { wins: amount });
+              await sendMessage(chatId, `✅ Added ${amount} win(s) to user ${targetUserId}`);
+            }
+          }
+        }
+      }
+
+      // ---------- Player commands ----------
       if (text === "/battle") {
         if (battles[chatId]) {
           await sendMessage(chatId, "⚔️ You are already in a battle!");
@@ -232,6 +259,7 @@ serve(async (req) => {
       }
     }
 
+    // ---------- Callback query for moves ----------
     if (update.callback_query) {
       const chatId = String(update.callback_query.message.chat.id);
       const choice = update.callback_query.data;
@@ -257,4 +285,5 @@ serve(async (req) => {
 
   return new Response("ok");
 });
+
 
