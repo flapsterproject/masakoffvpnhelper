@@ -16,9 +16,29 @@ const SPECIFIC_USERS = ["@amangeldimasakov", "@Tm_happ_kripto"];
 let activeLoop: number | null = null;
 let activePostId: number | null = null;
 
+// --- Send message with footer ---
+async function sendMessageWithFooter(toChat: string, text: string, footer: string) {
+  const resp = await fetch(`${TELEGRAM_API}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: toChat,
+      text: text + footer,
+      parse_mode: "HTML",
+    }),
+  });
+  const data = await resp.json();
+  if (data.ok) {
+    // Start reply loop after 5s
+    setTimeout(() => startReplyingLoop(data.result.message_id), 5000);
+  } else {
+    console.error("Failed to send message:", data);
+  }
+}
+
 // --- Copy media with footer ---
 async function copyMessageWithFooter(fromChat: string, messageId: number, toChat: string, footer: string) {
-  await fetch(`${TELEGRAM_API}/copyMessage`, {
+  const resp = await fetch(`${TELEGRAM_API}/copyMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -29,6 +49,13 @@ async function copyMessageWithFooter(fromChat: string, messageId: number, toChat
       parse_mode: "HTML",
     }),
   });
+  const data = await resp.json();
+  if (data.ok) {
+    // Start reply loop after 5s
+    setTimeout(() => startReplyingLoop(data.result.message_id), 5000);
+  } else {
+    console.error("Failed to copy message:", data);
+  }
 }
 
 // --- Start infinite reply loop under latest post ---
@@ -133,15 +160,7 @@ serve(async (req: Request) => {
     )
   ) {
     if (text) {
-      await fetch(`${TELEGRAM_API}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: TARGET_CHANNEL,
-          text: text + footer,
-          parse_mode: "HTML",
-        }),
-      });
+      await sendMessageWithFooter(TARGET_CHANNEL, text, footer);
     } else {
       await copyMessageWithFooter(fromChatId.toString(), messageId, TARGET_CHANNEL, footer);
     }
@@ -149,6 +168,7 @@ serve(async (req: Request) => {
 
   return new Response("ok");
 });
+
 
 
 
