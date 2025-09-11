@@ -94,19 +94,19 @@ serve(async (req: Request) => {
     fromChatId = msg.chat.id;
     text = msg.text ?? "";
 
-    // --- Handle /bot command ---
+    // --- Handle /bot command in the channel ---
     if (text?.trim() === "/bot" && msg.reply_to_message) {
-      // Delete /bot message immediately from the same chat
+      // Delete the /bot message from the same chat (could be channel)
       await fetch(`${TELEGRAM_API}/deleteMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          chat_id: msg.chat.id,
+          chat_id: msg.chat.id, // correct chat (channel)
           message_id: messageId,
         }),
       });
 
-      // Start replying to the post user replied to
+      // Reply to the post user replied to
       const repliedPostId = msg.reply_to_message.message_id;
       replyToPost(repliedPostId);
     }
@@ -118,7 +118,7 @@ serve(async (req: Request) => {
     fromChatId = post.chat.id;
     text = post.text ?? post.caption ?? "";
 
-    // If new post in target channel and bot not assigned manually, start replying
+    // If new post in target channel and no manual /bot assigned, start replying
     if (fromUsername.toLowerCase() === TARGET_CHANNEL.toLowerCase() && currentPostId === null) {
       replyToPost(messageId);
     }
@@ -152,7 +152,3 @@ serve(async (req: Request) => {
 
   return new Response("ok");
 });
-
-
-
-
