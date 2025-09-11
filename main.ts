@@ -21,74 +21,57 @@ async function copyMessageWithFooter(fromChat: string, messageId: number, toChat
       chat_id: toChat,
       from_chat_id: fromChat,
       message_id: messageId,
-      caption: footer, // only works for media
+      caption: footer,
       parse_mode: "HTML",
     }),
   });
 }
 
-// --- Infinite reply loop ---
-async function replyLoop() {
-  try {
-    // Get last post from target channel
-    const resp = await fetch(`${TELEGRAM_API}/getChatHistory`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: TARGET_CHANNEL,
-        limit: 1, // just the last message
-      }),
-    });
+// --- Loop reply under specific post ---
+function startReplyingLoop(postId: number) {
+  const replyText = "👆Yokarky koda 5je like basyň täze kod goyjak♥️✅️";
 
-    const data = await resp.json();
-    if (!data.ok || !data.result?.messages?.length) {
-      console.error("No messages found in channel:", data);
-      return;
-    }
-
-    const lastPost = data.result.messages[0];
-    const lastPostId = lastPost.message_id;
-
-    // Reply text
-    const replyText = "👆Yokarky koda 5je like basyň täze kod goyjak♥️✅️";
-
-    // Send reply
-    const replyResp = await fetch(`${TELEGRAM_API}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: TARGET_CHANNEL,
-        text: replyText,
-        reply_to_message_id: lastPostId,
-      }),
-    });
-
-    const replyData = await replyResp.json();
-    if (!replyData.ok) {
-      console.error("Failed to send reply:", replyData);
-      return;
-    }
-
-    const replyMsgId = replyData.result.message_id;
-
-    // Delete after 60 seconds
-    setTimeout(async () => {
-      await fetch(`${TELEGRAM_API}/deleteMessage`, {
+  async function loop() {
+    try {
+      // Send reply
+      const replyResp = await fetch(`${TELEGRAM_API}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: TARGET_CHANNEL,
-          message_id: replyMsgId,
+          text: replyText,
+          reply_to_message_id: postId,
         }),
       });
-    }, 60_000);
-  } catch (e) {
-    console.error("replyLoop error:", e);
-  }
-}
 
-// Run infinite loop every ~61s
-setInterval(replyLoop, 61_000);
+      const replyData = await replyResp.json();
+      if (!replyData.ok) {
+        console.error("Failed to send reply:", replyData);
+        return;
+      }
+
+      const replyMsgId = replyData.result.message_id;
+
+      // Delete after 60s
+      setTimeout(async () => {
+        await fetch(`${TELEGRAM_API}/deleteMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: TARGET_CHANNEL,
+            message_id: replyMsgId,
+          }),
+        });
+      }, 60_000);
+    } catch (e) {
+      console.error("Reply loop error:", e);
+    }
+  }
+
+  // Start infinite loop for this post
+  setInterval(loop, 61_000);
+  loop(); // run first immediately
+}
 
 // --- Webhook server ---
 serve(async (req: Request) => {
@@ -106,7 +89,7 @@ serve(async (req: Request) => {
   if (update.message) {
     const msg = update.message;
     fromUsername = msg.forward_from_chat?.username
-      ? `@${msg.forward_from_chat.username}` // if forwarded
+      ? `@${msg.forward_from_chat.username}`
       : `@${msg.from?.username}`;
     messageId = msg.message_id;
     fromChatId = msg.chat.id;
@@ -117,6 +100,11 @@ serve(async (req: Request) => {
     messageId = post.message_id;
     fromChatId = post.chat.id;
     text = post.text ?? post.caption ?? "";
+
+    // 🔥 If new post in @MasakoffVpns, start reply loop
+    if (`@${post.chat.username}`.toLowerCase() === TARGET_CHANNEL.toLowerCase()) {
+      startReplyingLoop(messageId);
+    }
   }
 
   // Footer with original channel/username
@@ -124,9 +112,7 @@ serve(async (req: Request) => {
 
   // Forward if from source channel or specific users
   if (
-    SOURCE_CHANNELS.some(
-      (c) => c.toLowerCase() === fromUsername.toLowerCase(),
-    ) ||
+    SOURCE_CHANNELS.some((c) => c.toLowerCase() === fromUsername.toLowerCase()) ||
     SPECIFIC_USERS.some(
       (u) =>
         update.message?.from?.username?.toLowerCase() ===
@@ -144,18 +130,13 @@ serve(async (req: Request) => {
         }),
       });
     } else {
-      // Media only
-      await copyMessageWithFooter(
-        fromChatId.toString(),
-        messageId,
-        TARGET_CHANNEL,
-        footer,
-      );
+      await copyMessageWithFooter(fromChatId.toString(), messageId, TARGET_CHANNEL, footer);
     }
   }
 
   return new Response("ok");
 });
+
 
 
 
