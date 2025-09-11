@@ -5,64 +5,55 @@ const TOKEN = Deno.env.get("BOT_TOKEN")!;
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
-// Source channels
+// Channels & users
 const SOURCE_CHANNELS = ["@TkmRace", "@SERWERSTM1"];
-// Target channel
 const TARGET_CHANNEL = "@MasakoffVpns";
-// Specific users
 const SPECIFIC_USERS = ["@amangeldimasakov", "@Tm_happ_kripto"];
-
-// Your private chat ID (replace with your Telegram user ID)
-const PRIVATE_CHAT_ID = 123456789; 
+const PRIVATE_CHAT_ID = 123456789; // replace with your numeric Telegram ID
 
 const LOOP_TEXT = "👆Yokarky koda 5je like basyň täze kod goyjak♥️✅️";
 
-// Track last reply in channel
 let lastReplyId: number | null = null;
-// Track current post ID to reply under
-let currentPostId: number | null = null;
+let latestPostId: number | null = null;
 
-// --- Loop to reply every 1 minute ---
-function startReplyLoop() {
-  setInterval(async () => {
-    if (!currentPostId) return;
+// --- Reply loop every 1 minute under the latest post ---
+async function replyLoop() {
+  if (!latestPostId) return;
 
-    try {
-      // Delete previous bot reply
-      if (lastReplyId) {
-        await fetch(`${TELEGRAM_API}/deleteMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: TARGET_CHANNEL,
-            message_id: lastReplyId,
-          }),
-        });
-      }
-
-      // Send new reply under the current post
-      const resp = await fetch(`${TELEGRAM_API}/sendMessage`, {
+  try {
+    // Delete previous bot reply
+    if (lastReplyId) {
+      await fetch(`${TELEGRAM_API}/deleteMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: TARGET_CHANNEL,
-          text: LOOP_TEXT,
-          reply_to_message_id: currentPostId,
+          message_id: lastReplyId,
         }),
       });
-
-      const data = await resp.json();
-      if (data.ok) {
-        lastReplyId = data.result.message_id;
-      }
-    } catch (e) {
-      console.error("Reply loop error:", e);
     }
-  }, 60_000);
+
+    // Send new reply under the latest post
+    const resp = await fetch(`${TELEGRAM_API}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: TARGET_CHANNEL,
+        text: LOOP_TEXT,
+        reply_to_message_id: latestPostId,
+      }),
+    });
+
+    const data = await resp.json();
+    if (data.ok) lastReplyId = data.result.message_id;
+
+  } catch (e) {
+    console.error("Reply loop error:", e);
+  }
 }
 
-// Start loop immediately
-startReplyLoop();
+// Start repeating loop every 60 seconds
+setInterval(replyLoop, 60_000);
 
 // --- Webhook server ---
 serve(async (req: Request) => {
@@ -72,51 +63,46 @@ serve(async (req: Request) => {
 
   const update = await req.json();
 
-  let fromUsername = "";
-  let messageId = 0;
-  let fromChatId = 0;
-  let text = "";
-
+  // --- Forwarded messages to private chat ---
   if (update.message) {
     const msg = update.message;
-    fromUsername = msg.forward_from_chat?.username
-      ? `@${msg.forward_from_chat.username}`
-      : `@${msg.from?.username}`;
-    messageId = msg.message_id;
-    fromChatId = msg.chat.id;
-    text = msg.text ?? "";
+    const isBot = msg.from?.is_bot;
+    if (isBot) return new Response("ok");
 
-    // --- Forwarded messages to private chat ---
-    if (
-      msg.forward_from_chat &&
-      (SOURCE_CHANNELS.some(c => c.toLowerCase() === msg.forward_from_chat.username?.toLowerCase()) ||
-      SPECIFIC_USERS.some(u => u.replace("@", "").toLowerCase() === msg.forward_from_chat.username?.toLowerCase()))
-    ) {
-      // Send forwarded content to you privately
-      let content = text ?? "";
-      if (msg.caption) content = msg.caption;
+    if (msg.forward_from_chat) {
+      const fwdUsername = msg.forward_from_chat.username
+        ? `@${msg.forward_from_chat.username}`
+        : "";
 
-      await fetch(`${TELEGRAM_API}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: PRIVATE_CHAT_ID,
-          text: content,
-          parse_mode: "HTML",
-        }),
-      });
+      if (
+        SOURCE_CHANNELS.map(c => c.toLowerCase()).includes(fwdUsername.toLowerCase()) ||
+        SPECIFIC_USERS.map(u => u.replace("@", "").toLowerCase()).includes(fwdUsername.toLowerCase())
+      ) {
+        const content = msg.text ?? msg.caption ?? "";
+        if (content) {
+          await fetch(`${TELEGRAM_API}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: PRIVATE_CHAT_ID,
+              text: content,
+              parse_mode: "HTML",
+            }),
+          });
+        }
+      }
     }
+  }
 
-  } else if (update.channel_post) {
+  // --- Track latest post in the target channel ---
+  if (update.channel_post) {
     const post = update.channel_post;
-    fromUsername = `@${post.chat?.username}`;
-    messageId = post.message_id;
-    fromChatId = post.chat.id;
-    text = post.text ?? post.caption ?? "";
+    const username = post.chat?.username ? `@${post.chat.username}` : "";
 
-    // --- New post in target channel: update currentPostId ---
-    if (fromUsername.toLowerCase() === TARGET_CHANNEL.toLowerCase()) {
-      currentPostId = messageId;
+    if (username.toLowerCase() === TARGET_CHANNEL.toLowerCase()) {
+      latestPostId = post.message_id;
+      // Immediately reply under the new post
+      replyLoop();
     }
   }
 
