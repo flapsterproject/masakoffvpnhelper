@@ -15,17 +15,22 @@ const SPECIFIC_USERS = ["@amangeldimasakov", "@Tm_happ_kripto"];
 // Keep active loop + replies
 let activeLoop: number | null = null;
 let activePostId: number | null = null;
-let activeReplies: number[] = []; // reply IDs to clean
+let activeReplies: number[] = [];
 
 // --- Copy message (footer only for media) ---
-async function copyMessageWithFooter(fromChat: string, messageId: number, toChat: string, footer: string, isMedia: boolean) {
+async function copyMessageWithFooter(
+  fromChat: string,
+  messageId: number,
+  toChat: string,
+  footer: string,
+  isMedia: boolean,
+) {
   const body: Record<string, unknown> = {
     chat_id: toChat,
     from_chat_id: fromChat,
     message_id: messageId,
   };
 
-  // ✅ Only attach footer if it's media
   if (isMedia) {
     body.caption = footer;
     body.parse_mode = "HTML";
@@ -38,23 +43,20 @@ async function copyMessageWithFooter(fromChat: string, messageId: number, toChat
   });
 
   const data = await resp.json();
-  if (data.ok) {
-    // Start reply loop after 5s
-    setTimeout(() => startReplyingLoop(data.result.message_id), 5000);
-  } else {
+  if (!data.ok) {
     console.error("Failed to copy message:", data);
   }
 }
 
-// --- Start infinite reply loop under latest post ---
+// --- Start infinite reply loop under only the latest post ---
 function startReplyingLoop(postId: number) {
-  // Stop old loop if exists
+  // 🛑 Stop old loop if exists
   if (activeLoop !== null) {
     clearInterval(activeLoop);
     activeLoop = null;
   }
 
-  // 🧹 Delete old replies immediately
+  // 🧹 Delete old replies
   if (activeReplies.length > 0) {
     for (const rId of activeReplies) {
       fetch(`${TELEGRAM_API}/deleteMessage`, {
@@ -69,6 +71,7 @@ function startReplyingLoop(postId: number) {
     activeReplies = [];
   }
 
+  // Set new post ID
   activePostId = postId;
   const replyText = "👆Yokarky koda 5je like basyň täze kod goyjak♥️✅️";
 
@@ -96,7 +99,7 @@ function startReplyingLoop(postId: number) {
       const replyMsgId = replyData.result.message_id;
       activeReplies.push(replyMsgId);
 
-      // Delete after 60s automatically
+      // Auto delete reply after 60s
       setTimeout(async () => {
         await fetch(`${TELEGRAM_API}/deleteMessage`, {
           method: "POST",
@@ -106,7 +109,6 @@ function startReplyingLoop(postId: number) {
             message_id: replyMsgId,
           }),
         });
-        // remove from activeReplies list
         activeReplies = activeReplies.filter((id) => id !== replyMsgId);
       }, 60_000);
     } catch (e) {
@@ -114,7 +116,7 @@ function startReplyingLoop(postId: number) {
     }
   }
 
-  // Run loop forever every 61s
+  // Run every 61s
   activeLoop = setInterval(loop, 61_000);
   loop(); // run immediately
 }
@@ -147,9 +149,9 @@ serve(async (req: Request) => {
     fromChatId = post.chat.id;
     text = post.text ?? post.caption ?? "";
 
-    // 🔥 If new post in @MasakoffVpns, restart reply loop
+    // 🔥 Only reply loop for latest post in @MasakoffVpns
     if (`@${post.chat.username}`.toLowerCase() === TARGET_CHANNEL.toLowerCase()) {
-      startReplyingLoop(messageId);
+      setTimeout(() => startReplyingLoop(messageId), 5000);
     }
   }
 
@@ -165,7 +167,6 @@ serve(async (req: Request) => {
         u.replace("@", "").toLowerCase(),
     )
   ) {
-    // Detect if it's media
     const isMedia = !!(
       update.message?.photo ||
       update.message?.video ||
@@ -175,7 +176,6 @@ serve(async (req: Request) => {
       update.channel_post?.document
     );
 
-    // ✅ Always copy message (text remains copyable, media gets footer)
     await copyMessageWithFooter(
       fromChatId.toString(),
       messageId,
