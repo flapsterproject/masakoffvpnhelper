@@ -46,7 +46,7 @@ function startReplyingLoop(postId: number) {
     try {
       if (!activePostId) return;
 
-      // Send reply
+      // Send reply directly under channel post
       const replyResp = await fetch(`${TELEGRAM_API}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -100,6 +100,7 @@ serve(async (req: Request) => {
   let text = "";
 
   if (update.message) {
+    // private/group message
     const msg = update.message;
     fromUsername = msg.forward_from_chat?.username
       ? `@${msg.forward_from_chat.username}`
@@ -108,13 +109,14 @@ serve(async (req: Request) => {
     fromChatId = msg.chat.id;
     text = msg.text ?? "";
   } else if (update.channel_post) {
+    // 🔥 new channel post
     const post = update.channel_post;
     fromUsername = `@${post.chat?.username}`;
     messageId = post.message_id;
     fromChatId = post.chat.id;
     text = post.text ?? post.caption ?? "";
 
-    // 🔥 Always restart loop when new post appears in @MasakoffVpns (even if bot posted it)
+    // If new post in @MasakoffVpns, restart reply loop
     if (`@${post.chat.username}`.toLowerCase() === TARGET_CHANNEL.toLowerCase()) {
       startReplyingLoop(messageId);
     }
@@ -149,6 +151,7 @@ serve(async (req: Request) => {
 
   return new Response("ok");
 });
+
 
 
 
