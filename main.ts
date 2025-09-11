@@ -16,6 +16,8 @@ const LOOP_TEXT = "👆Yokarky koda 5je like basyň täze kod goyjak♥️✅️
 
 // Track last reply ID in the channel
 let lastReplyId: number | null = null;
+// Track current post ID bot is replying to
+let currentPostId: number | null = null;
 
 // --- Copy media with footer ---
 async function copyMessageWithFooter(fromChat: string, messageId: number, toChat: string, footer: string) {
@@ -32,10 +34,10 @@ async function copyMessageWithFooter(fromChat: string, messageId: number, toChat
   });
 }
 
-// --- Reply to a new post ---
+// --- Reply to a post ---
 async function replyToPost(postId: number) {
   try {
-    // Delete previous reply if exists
+    // Delete previous bot reply if exists
     if (lastReplyId) {
       await fetch(`${TELEGRAM_API}/deleteMessage`, {
         method: "POST",
@@ -61,6 +63,7 @@ async function replyToPost(postId: number) {
     const data = await resp.json();
     if (data.ok) {
       lastReplyId = data.result.message_id;
+      currentPostId = postId;
     } else {
       console.error("Failed to send reply:", data);
     }
@@ -90,6 +93,24 @@ serve(async (req: Request) => {
     messageId = msg.message_id;
     fromChatId = msg.chat.id;
     text = msg.text ?? "";
+
+    // --- Handle /bot command ---
+    if (text?.trim() === "/bot" && msg.reply_to_message) {
+      // Delete user's /bot message immediately
+      await fetch(`${TELEGRAM_API}/deleteMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: TARGET_CHANNEL,
+          message_id: messageId,
+        }),
+      });
+
+      // Start replying to the post user replied to
+      const repliedPostId = msg.reply_to_message.message_id;
+      replyToPost(repliedPostId);
+    }
+
   } else if (update.channel_post) {
     const post = update.channel_post;
     fromUsername = `@${post.chat?.username}`;
@@ -97,8 +118,8 @@ serve(async (req: Request) => {
     fromChatId = post.chat.id;
     text = post.text ?? post.caption ?? "";
 
-    // If new post in target channel, reply and delete old reply
-    if (fromUsername.toLowerCase() === TARGET_CHANNEL.toLowerCase()) {
+    // If new post in target channel and bot not manually assigned, start replying
+    if (fromUsername.toLowerCase() === TARGET_CHANNEL.toLowerCase() && currentPostId === null) {
       replyToPost(messageId);
     }
   }
@@ -131,5 +152,6 @@ serve(async (req: Request) => {
 
   return new Response("ok");
 });
+
 
 
