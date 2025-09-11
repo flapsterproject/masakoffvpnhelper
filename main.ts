@@ -43,7 +43,10 @@ async function copyMessageWithFooter(
   });
 
   const data = await resp.json();
-  if (!data.ok) {
+  if (data.ok) {
+    // ✅ After bot posts, wait 5s then start replying
+    setTimeout(() => startReplyingLoop(data.result.message_id), 5000);
+  } else {
     console.error("Failed to copy message:", data);
   }
 }
@@ -149,7 +152,7 @@ serve(async (req: Request) => {
     fromChatId = post.chat.id;
     text = post.text ?? post.caption ?? "";
 
-    // 🔥 Only reply loop for latest post in @MasakoffVpns
+    // 🔥 If someone posts directly in @MasakoffVpns (not via bot forward)
     if (`@${post.chat.username}`.toLowerCase() === TARGET_CHANNEL.toLowerCase()) {
       setTimeout(() => startReplyingLoop(messageId), 5000);
     }
@@ -176,6 +179,7 @@ serve(async (req: Request) => {
       update.channel_post?.document
     );
 
+    // ✅ Copy post into channel, then after 5s start replying
     await copyMessageWithFooter(
       fromChatId.toString(),
       messageId,
@@ -187,6 +191,7 @@ serve(async (req: Request) => {
 
   return new Response("ok");
 });
+
 
 
 
