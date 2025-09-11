@@ -61,21 +61,19 @@ serve(async (req: Request) => {
 
   const update = await req.json();
 
-  // --- Handle private messages / forwarded posts ---
+  // --- Handle private messages / forwarded messages ---
   if (update.message) {
     const msg = update.message;
     const isBot = msg.from?.is_bot;
     if (isBot) return new Response("ok");
 
-    // --- If message is forwarded ---
     if (msg.forward_from_chat || msg.forward_from_message_id) {
       const fwdUsername = msg.forward_from_chat?.username
         ? `@${msg.forward_from_chat.username}`
         : "Unknown";
-
       const footer = `\n\n📌 Çeşme: ${fwdUsername}`;
 
-      // If text message
+      // If text
       if (msg.text) {
         await fetch(`${TELEGRAM_API}/sendMessage`, {
           method: "POST",
@@ -88,8 +86,8 @@ serve(async (req: Request) => {
         });
       }
 
-      // If media (photo/video/document), copy it with footer
-      else if (msg.photo || msg.video || msg.document) {
+      // If media (photo, video, document, sticker, etc)
+      else if (msg.photo || msg.video || msg.document || msg.sticker) {
         await fetch(`${TELEGRAM_API}/copyMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -97,7 +95,7 @@ serve(async (req: Request) => {
             chat_id: PRIVATE_CHAT_ID,
             from_chat_id: msg.chat.id,
             message_id: msg.message_id,
-            caption: footer,
+            caption: msg.caption ? msg.caption + footer : footer,
             parse_mode: "HTML",
           }),
         });
@@ -119,6 +117,7 @@ serve(async (req: Request) => {
 
   return new Response("ok");
 });
+
 
 
 
