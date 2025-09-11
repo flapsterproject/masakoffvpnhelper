@@ -16,12 +16,11 @@ const LOOP_TEXT = "👆Yokarky koda 5je like basyň täze kod goyjak♥️✅️
 let lastReplyId: number | null = null;
 let latestPostId: number | null = null;
 
-// --- Reply loop every 1 minute under the latest post ---
+// --- Reply loop every 1 minute under latest post ---
 async function replyLoop() {
   if (!latestPostId) return;
 
   try {
-    // Delete previous bot reply
     if (lastReplyId) {
       await fetch(`${TELEGRAM_API}/deleteMessage`, {
         method: "POST",
@@ -33,7 +32,6 @@ async function replyLoop() {
       });
     }
 
-    // Send new reply under the latest post
     const resp = await fetch(`${TELEGRAM_API}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -63,12 +61,13 @@ serve(async (req: Request) => {
 
   const update = await req.json();
 
-  // --- Forwarded messages to private chat ---
+  // --- Handle private messages ---
   if (update.message) {
     const msg = update.message;
     const isBot = msg.from?.is_bot;
     if (isBot) return new Response("ok");
 
+    // --- Forwarded messages from channels/users ---
     if (msg.forward_from_chat) {
       const fwdUsername = msg.forward_from_chat.username
         ? `@${msg.forward_from_chat.username}`
@@ -80,21 +79,36 @@ serve(async (req: Request) => {
       ) {
         const content = msg.text ?? msg.caption ?? "";
         if (content) {
+          // Add footer
+          const footer = `\n\n📌 Çeşme: ${fwdUsername}`;
           await fetch(`${TELEGRAM_API}/sendMessage`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               chat_id: PRIVATE_CHAT_ID,
-              text: content,
+              text: content + footer,
               parse_mode: "HTML",
             }),
           });
         }
       }
+    } else {
+      // If you just send a normal message to bot, also echo with footer
+      const content = msg.text ?? "";
+      if (content) {
+        await fetch(`${TELEGRAM_API}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: PRIVATE_CHAT_ID,
+            text: content,
+          }),
+        });
+      }
     }
   }
 
-  // --- Track latest post in the target channel ---
+  // --- Handle new channel posts ---
   if (update.channel_post) {
     const post = update.channel_post;
     const username = post.chat?.username ? `@${post.chat.username}` : "";
@@ -108,4 +122,5 @@ serve(async (req: Request) => {
 
   return new Response("ok");
 });
+
 
