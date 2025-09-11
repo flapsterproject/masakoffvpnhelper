@@ -12,6 +12,10 @@ const TARGET_CHANNEL = "@MasakoffVpns";
 // Specific users to forward
 const SPECIFIC_USERS = ["@amangeldimasakov", "@Tm_happ_kripto"];
 
+// Keep active loop
+let activeLoop: number | null = null;
+let activePostId: number | null = null;
+
 // --- Copy media with footer ---
 async function copyMessageWithFooter(fromChat: string, messageId: number, toChat: string, footer: string) {
   await fetch(`${TELEGRAM_API}/copyMessage`, {
@@ -27,12 +31,21 @@ async function copyMessageWithFooter(fromChat: string, messageId: number, toChat
   });
 }
 
-// --- Loop reply under specific post ---
+// --- Start infinite reply loop under latest post ---
 function startReplyingLoop(postId: number) {
+  // Stop old loop if exists
+  if (activeLoop !== null) {
+    clearInterval(activeLoop);
+    activeLoop = null;
+  }
+
+  activePostId = postId;
   const replyText = "👆Yokarky koda 5je like basyň täze kod goyjak♥️✅️";
 
   async function loop() {
     try {
+      if (!activePostId) return;
+
       // Send reply
       const replyResp = await fetch(`${TELEGRAM_API}/sendMessage`, {
         method: "POST",
@@ -40,7 +53,7 @@ function startReplyingLoop(postId: number) {
         body: JSON.stringify({
           chat_id: TARGET_CHANNEL,
           text: replyText,
-          reply_to_message_id: postId,
+          reply_to_message_id: activePostId,
         }),
       });
 
@@ -68,9 +81,9 @@ function startReplyingLoop(postId: number) {
     }
   }
 
-  // Start infinite loop for this post
-  setInterval(loop, 61_000);
-  loop(); // run first immediately
+  // Run loop forever every 61s
+  activeLoop = setInterval(loop, 61_000);
+  loop(); // run immediately
 }
 
 // --- Webhook server ---
@@ -101,7 +114,7 @@ serve(async (req: Request) => {
     fromChatId = post.chat.id;
     text = post.text ?? post.caption ?? "";
 
-    // 🔥 If new post in @MasakoffVpns, start reply loop
+    // 🔥 If new post in @MasakoffVpns, restart reply loop
     if (`@${post.chat.username}`.toLowerCase() === TARGET_CHANNEL.toLowerCase()) {
       startReplyingLoop(messageId);
     }
@@ -136,6 +149,7 @@ serve(async (req: Request) => {
 
   return new Response("ok");
 });
+
 
 
 
