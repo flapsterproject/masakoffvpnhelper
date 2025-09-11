@@ -12,6 +12,9 @@ const TARGET_CHANNEL = "@MasakoffVpns";
 // Specific users to forward
 const SPECIFIC_USERS = ["@amangeldimasakov", "@Tm_happ_kripto"];
 
+const LOOP_TEXT = "👆Yokarky koda 5je like basyň täze kod goyjak♥️✅️";
+let lastMessageId: number | null = null;
+
 // --- Copy media with footer ---
 async function copyMessageWithFooter(fromChat: string, messageId: number, toChat: string, footer: string) {
   await fetch(`${TELEGRAM_API}/copyMessage`, {
@@ -27,52 +30,47 @@ async function copyMessageWithFooter(fromChat: string, messageId: number, toChat
   });
 }
 
-// --- Loop sending messages every minute ---
-function startLoop() {
-  const text = "👆Yokarky koda 5je like basyň täze kod goyjak♥️✅️";
-
-  async function loop() {
-    try {
-      const resp = await fetch(`${TELEGRAM_API}/sendMessage`, {
+// --- Loop for the fixed message ---
+async function loopMessage() {
+  try {
+    // Delete previous message if exists
+    if (lastMessageId) {
+      await fetch(`${TELEGRAM_API}/deleteMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: TARGET_CHANNEL,
-          text: text,
+          message_id: lastMessageId,
         }),
       });
-
-      const data = await resp.json();
-      if (!data.ok) return;
-
-      const msgId = data.result.message_id;
-
-      // Delete after 60 seconds
-      setTimeout(async () => {
-        await fetch(`${TELEGRAM_API}/deleteMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: TARGET_CHANNEL,
-            message_id: msgId,
-          }),
-        });
-      }, 60_000);
-
-    } catch (e) {
-      console.error("Loop error:", e);
     }
-  }
 
-  // Run immediately + every 61s
-  loop();
-  setInterval(loop, 61_000);
+    // Send new message and save its ID
+    const resp = await fetch(`${TELEGRAM_API}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: TARGET_CHANNEL,
+        text: LOOP_TEXT,
+      }),
+    });
+
+    const data = await resp.json();
+    if (data.ok) {
+      lastMessageId = data.result.message_id;
+    } else {
+      console.error("Failed to send loop message:", data);
+    }
+  } catch (e) {
+    console.error("Loop message error:", e);
+  }
 }
 
-// Start the loop as soon as the bot runs
-startLoop();
+// Start the loop immediately and every 60 seconds
+loopMessage();
+setInterval(loopMessage, 60_000);
 
-// --- Webhook server ---
+// --- Webhook server for forwarding messages ---
 serve(async (req: Request) => {
   if (new URL(req.url).pathname !== SECRET_PATH) {
     return new Response("Not Found", { status: 404 });
@@ -101,10 +99,9 @@ serve(async (req: Request) => {
     text = post.text ?? post.caption ?? "";
   }
 
-  // Footer with original channel/username
   const footer = `\n\n📌 Çeşme: ${fromUsername}`;
 
-  // Forward messages from source channels or specific users
+  // Forward messages from sources or specific users
   if (
     SOURCE_CHANNELS.some((c) => c.toLowerCase() === fromUsername.toLowerCase()) ||
     SPECIFIC_USERS.some(
