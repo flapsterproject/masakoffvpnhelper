@@ -17,39 +17,26 @@ let activeLoop: number | null = null;
 let activePostId: number | null = null;
 let activeReplies: number[] = []; // reply IDs to clean
 
-// --- Send message with footer and start loop ---
-async function sendMessageWithFooter(toChat: string, text: string, footer: string) {
-  const resp = await fetch(`${TELEGRAM_API}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: toChat,
-      text: text + footer,
-      parse_mode: "HTML",
-    }),
-  });
-  const data = await resp.json();
-  if (data.ok) {
-    // Start reply loop after 5s
-    setTimeout(() => startReplyingLoop(data.result.message_id), 5000);
-  } else {
-    console.error("Failed to send message:", data);
-  }
-}
+// --- Copy message (footer only for media) ---
+async function copyMessageWithFooter(fromChat: string, messageId: number, toChat: string, footer: string, isMedia: boolean) {
+  const body: Record<string, unknown> = {
+    chat_id: toChat,
+    from_chat_id: fromChat,
+    message_id: messageId,
+  };
 
-// --- Copy message with footer and start loop ---
-async function copyMessageWithFooter(fromChat: string, messageId: number, toChat: string, footer: string) {
+  // ✅ Only attach footer if it's media
+  if (isMedia) {
+    body.caption = footer;
+    body.parse_mode = "HTML";
+  }
+
   const resp = await fetch(`${TELEGRAM_API}/copyMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: toChat,
-      from_chat_id: fromChat,
-      message_id: messageId,
-      caption: footer,
-      parse_mode: "HTML",
-    }),
+    body: JSON.stringify(body),
   });
+
   const data = await resp.json();
   if (data.ok) {
     // Start reply loop after 5s
@@ -178,15 +165,29 @@ serve(async (req: Request) => {
         u.replace("@", "").toLowerCase(),
     )
   ) {
-    if (text) {
-      await sendMessageWithFooter(TARGET_CHANNEL, text, footer);
-    } else {
-      await copyMessageWithFooter(fromChatId.toString(), messageId, TARGET_CHANNEL, footer);
-    }
+    // Detect if it's media
+    const isMedia = !!(
+      update.message?.photo ||
+      update.message?.video ||
+      update.message?.document ||
+      update.channel_post?.photo ||
+      update.channel_post?.video ||
+      update.channel_post?.document
+    );
+
+    // ✅ Always copy message (text remains copyable, media gets footer)
+    await copyMessageWithFooter(
+      fromChatId.toString(),
+      messageId,
+      TARGET_CHANNEL,
+      footer,
+      isMedia,
+    );
   }
 
   return new Response("ok");
 });
+
 
 
 
