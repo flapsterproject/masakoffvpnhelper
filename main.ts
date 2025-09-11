@@ -76,7 +76,7 @@ function startReplyingLoop(postId: number) {
 
   // Set new post ID
   activePostId = postId;
-  const replyText = "👆Yokarky koda 5je like basyň täze kod goyjak♥️✅️";
+  const replyText = "👆Yokarky koda 10 like basyň täze kod goyjak♥️✅️";
 
   async function loop() {
     try {
@@ -120,7 +120,7 @@ function startReplyingLoop(postId: number) {
   }
 
   // Run every 61s
-  activeLoop = setInterval(loop, 61_000);
+  activeLoop = setInterval(loop, 600_000);
   loop(); // run immediately
 }
 
