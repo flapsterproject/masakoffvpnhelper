@@ -12,71 +12,91 @@ const TARGET_CHANNEL = "@MasakoffVpns";
 // Specific users to forward
 const SPECIFIC_USERS = ["@amangeldimasakov", "@Tm_happ_kripto"];
 
-// Keep active loop + replies
+// Keep active loop
 let activeLoop: number | null = null;
 let activePostId: number | null = null;
-let activeReplies: number[] = [];
 
-// --- Copy message (footer only for media) ---
+// --- Copy media with footer ---
 async function copyMessageWithFooter(
   fromChat: string,
   messageId: number,
   toChat: string,
   footer: string,
-  isMedia: boolean,
 ) {
-  const body: Record<string, unknown> = {
-    chat_id: toChat,
-    from_chat_id: fromChat,
-    message_id: messageId,
-  };
-
-  if (isMedia) {
-    body.caption = footer;
-    body.parse_mode = "HTML";
-  }
-
-  const resp = await fetch(`${TELEGRAM_API}/copyMessage`, {
+  await fetch(`${TELEGRAM_API}/copyMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      chat_id: toChat,
+      from_chat_id: fromChat,
+      message_id: messageId,
+      caption: footer,
+      parse_mode: "HTML",
+    }),
   });
+}
 
-  const data = await resp.json();
-  if (data.ok) {
-    // ✅ After bot posts, wait 5s then start replying
-    setTimeout(() => startReplyingLoop(data.result.message_id), 5000);
+// --- Forward logic ---
+async function forwardToTarget(
+  fromUsername: string,
+  text: string,
+  fromChatId: string,
+  messageId: number,
+) {
+  const footer = `\n\n📌 Çeşme: ${fromUsername}`;
+
+  if (text) {
+    // Text messages: send as new message so they stay copyable
+    const resp = await fetch(`${TELEGRAM_API}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: TARGET_CHANNEL,
+        text: text + footer,
+        parse_mode: "HTML",
+      }),
+    });
+
+    const data = await resp.json();
+    if (data.ok) {
+      // After sending, start reply loop on this post
+      const postId = data.result.message_id;
+      setTimeout(() => startReplyingLoop(postId), 5000);
+    }
   } else {
-    console.error("Failed to copy message:", data);
+    // Media messages: copy with footer caption
+    const resp = await fetch(`${TELEGRAM_API}/copyMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: TARGET_CHANNEL,
+        from_chat_id: fromChatId,
+        message_id: messageId,
+        caption: footer,
+        parse_mode: "HTML",
+      }),
+    });
+
+    const data = await resp.json();
+    if (data.ok) {
+      // After sending, start reply loop on this post
+      const postId = data.result.message_id;
+      setTimeout(() => startReplyingLoop(postId), 5000);
+    }
   }
 }
 
-// --- Start infinite reply loop under only the latest post ---
+// --- Start infinite reply loop under latest post ---
 function startReplyingLoop(postId: number) {
-  // 🛑 Stop old loop if exists
+  // Stop old loop if exists
   if (activeLoop !== null) {
     clearInterval(activeLoop);
     activeLoop = null;
   }
 
-  // 🧹 Delete old replies
-  if (activeReplies.length > 0) {
-    for (const rId of activeReplies) {
-      fetch(`${TELEGRAM_API}/deleteMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: TARGET_CHANNEL,
-          message_id: rId,
-        }),
-      }).catch(() => {});
-    }
-    activeReplies = [];
-  }
-
-  // Set new post ID
   activePostId = postId;
-  const replyText = "👆Yokarky koda 10 like basyň täze kod goyjak♥️✅️";
+  const replyText =
+    "👆Yokarky koda 10 like basyň täze kod goyjak♥️✅️";
 
   async function loop() {
     try {
@@ -100,9 +120,8 @@ function startReplyingLoop(postId: number) {
       }
 
       const replyMsgId = replyData.result.message_id;
-      activeReplies.push(replyMsgId);
 
-      // Auto delete reply after 60s
+      // Delete after 60s
       setTimeout(async () => {
         await fetch(`${TELEGRAM_API}/deleteMessage`, {
           method: "POST",
@@ -112,16 +131,15 @@ function startReplyingLoop(postId: number) {
             message_id: replyMsgId,
           }),
         });
-        activeReplies = activeReplies.filter((id) => id !== replyMsgId);
       }, 60_000);
     } catch (e) {
       console.error("Reply loop error:", e);
     }
   }
 
-  // Run every 61s
+  // Run loop every 10 minutes
   activeLoop = setInterval(loop, 600_000);
-  loop(); // run immediately
+  setTimeout(loop, 5000); // first reply after 5 seconds
 }
 
 // --- Webhook server ---
@@ -152,14 +170,11 @@ serve(async (req: Request) => {
     fromChatId = post.chat.id;
     text = post.text ?? post.caption ?? "";
 
-    // 🔥 If someone posts directly in @MasakoffVpns (not via bot forward)
+    // 🔥 If new post in @MasakoffVpns, restart reply loop after 5s
     if (`@${post.chat.username}`.toLowerCase() === TARGET_CHANNEL.toLowerCase()) {
       setTimeout(() => startReplyingLoop(messageId), 5000);
     }
   }
-
-  // Footer with original channel/username
-  const footer = `\n\n📌 Çeşme: ${fromUsername}`;
 
   // Forward if from source channel or specific users
   if (
@@ -170,27 +185,17 @@ serve(async (req: Request) => {
         u.replace("@", "").toLowerCase(),
     )
   ) {
-    const isMedia = !!(
-      update.message?.photo ||
-      update.message?.video ||
-      update.message?.document ||
-      update.channel_post?.photo ||
-      update.channel_post?.video ||
-      update.channel_post?.document
-    );
-
-    // ✅ Copy post into channel, then after 5s start replying
-    await copyMessageWithFooter(
+    await forwardToTarget(
+      fromUsername,
+      text,
       fromChatId.toString(),
       messageId,
-      TARGET_CHANNEL,
-      footer,
-      isMedia,
     );
   }
 
   return new Response("ok");
 });
+
 
 
 
