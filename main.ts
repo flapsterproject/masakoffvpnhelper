@@ -131,7 +131,7 @@ function startReplyingLoop(postId: number) {
             message_id: replyMsgId,
           }),
         });
-      }, 300_000);
+      }, 290_000);
     } catch (e) {
       console.error("Reply loop error:", e);
     }
