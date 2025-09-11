@@ -71,16 +71,23 @@ serve(async (req: Request) => {
       const fwdUsername = msg.forward_from_chat?.username
         ? `@${msg.forward_from_chat.username}`
         : "Unknown";
-      const footer = `\n\n📌 Çeşme: ${fwdUsername}`;
+
+      const footer = `📌 Çeşme: ${fwdUsername}`;
+
+      // helper: remove old footer
+      function removeOldFooter(text: string): string {
+        return text.replace(/\n*\s*📌 Çeşme:.*$/i, "").trim();
+      }
 
       // If text
       if (msg.text) {
+        const cleanText = removeOldFooter(msg.text);
         await fetch(`${TELEGRAM_API}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             chat_id: PRIVATE_CHAT_ID,
-            text: msg.text + footer,
+            text: cleanText + "\n\n" + footer,
             parse_mode: "HTML",
           }),
         });
@@ -88,6 +95,7 @@ serve(async (req: Request) => {
 
       // If media (photo, video, document, sticker, etc)
       else if (msg.photo || msg.video || msg.document || msg.sticker) {
+        const cleanCaption = msg.caption ? removeOldFooter(msg.caption) : "";
         await fetch(`${TELEGRAM_API}/copyMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -95,7 +103,7 @@ serve(async (req: Request) => {
             chat_id: PRIVATE_CHAT_ID,
             from_chat_id: msg.chat.id,
             message_id: msg.message_id,
-            caption: msg.caption ? msg.caption + footer : footer,
+            caption: cleanCaption ? cleanCaption + "\n\n" + footer : footer,
             parse_mode: "HTML",
           }),
         });
@@ -117,6 +125,7 @@ serve(async (req: Request) => {
 
   return new Response("ok");
 });
+
 
 
 
