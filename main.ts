@@ -138,7 +138,7 @@ function startReplyingLoop(postId: number) {
   }
 
   // Run loop every 10 minutes
-  activeLoop = setInterval(loop, 600_000);
+  activeLoop = setInterval(loop, 300_000);
   setTimeout(loop, 5000); // first reply after 5 seconds
 }
 
