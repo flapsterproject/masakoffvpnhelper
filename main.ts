@@ -12,11 +12,12 @@ const TARGET_CHANNEL = "@MasakoffVpns";
 // Specific users to forward
 const SPECIFIC_USERS = ["@amangeldimasakov", "@Tm_happ_kripto"];
 
-// Keep active loop
+// Keep active loop + replies
 let activeLoop: number | null = null;
 let activePostId: number | null = null;
+let activeReplies: number[] = []; // reply IDs to clean
 
-// --- Send message with footer ---
+// --- Send message with footer and start loop ---
 async function sendMessageWithFooter(toChat: string, text: string, footer: string) {
   const resp = await fetch(`${TELEGRAM_API}/sendMessage`, {
     method: "POST",
@@ -36,7 +37,7 @@ async function sendMessageWithFooter(toChat: string, text: string, footer: strin
   }
 }
 
-// --- Copy media with footer ---
+// --- Copy message with footer and start loop ---
 async function copyMessageWithFooter(fromChat: string, messageId: number, toChat: string, footer: string) {
   const resp = await fetch(`${TELEGRAM_API}/copyMessage`, {
     method: "POST",
@@ -66,6 +67,21 @@ function startReplyingLoop(postId: number) {
     activeLoop = null;
   }
 
+  // 🧹 Delete old replies immediately
+  if (activeReplies.length > 0) {
+    for (const rId of activeReplies) {
+      fetch(`${TELEGRAM_API}/deleteMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: TARGET_CHANNEL,
+          message_id: rId,
+        }),
+      }).catch(() => {});
+    }
+    activeReplies = [];
+  }
+
   activePostId = postId;
   const replyText = "👆Yokarky koda 5je like basyň täze kod goyjak♥️✅️";
 
@@ -91,8 +107,9 @@ function startReplyingLoop(postId: number) {
       }
 
       const replyMsgId = replyData.result.message_id;
+      activeReplies.push(replyMsgId);
 
-      // Delete after 60s
+      // Delete after 60s automatically
       setTimeout(async () => {
         await fetch(`${TELEGRAM_API}/deleteMessage`, {
           method: "POST",
@@ -102,6 +119,8 @@ function startReplyingLoop(postId: number) {
             message_id: replyMsgId,
           }),
         });
+        // remove from activeReplies list
+        activeReplies = activeReplies.filter((id) => id !== replyMsgId);
       }, 60_000);
     } catch (e) {
       console.error("Reply loop error:", e);
