@@ -14,8 +14,7 @@ const SPECIFIC_USERS = ["@amangeldimasakov", "@Tm_happ_kripto"];
 
 const LOOP_TEXT = "👆Yokarky koda 5je like basyň täze kod goyjak♥️✅️";
 
-// Track last post in the channel and last bot reply
-let lastPostId: number | null = null;
+// Track last reply ID in the channel
 let lastReplyId: number | null = null;
 
 // --- Copy media with footer ---
@@ -33,10 +32,8 @@ async function copyMessageWithFooter(fromChat: string, messageId: number, toChat
   });
 }
 
-// --- Send reply under the last post ---
-async function sendReply() {
-  if (!lastPostId) return;
-
+// --- Reply to a new post ---
+async function replyToPost(postId: number) {
   try {
     // Delete previous reply if exists
     if (lastReplyId) {
@@ -57,7 +54,7 @@ async function sendReply() {
       body: JSON.stringify({
         chat_id: TARGET_CHANNEL,
         text: LOOP_TEXT,
-        reply_to_message_id: lastPostId,
+        reply_to_message_id: postId,
       }),
     });
 
@@ -68,15 +65,11 @@ async function sendReply() {
       console.error("Failed to send reply:", data);
     }
   } catch (e) {
-    console.error("Error sending reply:", e);
+    console.error("Error replying to post:", e);
   }
 }
 
-// Start auto-reply loop every 60 seconds
-setInterval(sendReply, 60_000);
-sendReply(); // run immediately
-
-// --- Webhook server for forwarding messages ---
+// --- Webhook server ---
 serve(async (req: Request) => {
   if (new URL(req.url).pathname !== SECRET_PATH) {
     return new Response("Not Found", { status: 404 });
@@ -104,24 +97,9 @@ serve(async (req: Request) => {
     fromChatId = post.chat.id;
     text = post.text ?? post.caption ?? "";
 
-    // If new post in target channel, update lastPostId and delete old reply
+    // If new post in target channel, reply and delete old reply
     if (fromUsername.toLowerCase() === TARGET_CHANNEL.toLowerCase()) {
-      lastPostId = messageId;
-
-      if (lastReplyId) {
-        await fetch(`${TELEGRAM_API}/deleteMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: TARGET_CHANNEL,
-            message_id: lastReplyId,
-          }),
-        });
-        lastReplyId = null;
-      }
-
-      // Optionally send immediate reply to new post
-      sendReply();
+      replyToPost(messageId);
     }
   }
 
@@ -153,4 +131,5 @@ serve(async (req: Request) => {
 
   return new Response("ok");
 });
+
 
