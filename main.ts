@@ -12,10 +12,6 @@ const TARGET_CHANNEL = "@MasakoffVpns";
 // Specific users to forward
 const SPECIFIC_USERS = ["@amangeldimasakov", "@Tm_happ_kripto"];
 
-// Keep active loop
-let activeLoop: number | null = null;
-let activePostId: number | null = null;
-
 // --- Copy media with footer ---
 async function copyMessageWithFooter(fromChat: string, messageId: number, toChat: string, footer: string) {
   await fetch(`${TELEGRAM_API}/copyMessage`, {
@@ -31,60 +27,50 @@ async function copyMessageWithFooter(fromChat: string, messageId: number, toChat
   });
 }
 
-// --- Start infinite reply loop under latest post ---
-function startReplyingLoop(postId: number) {
-  // Stop old loop if exists
-  if (activeLoop !== null) {
-    clearInterval(activeLoop);
-    activeLoop = null;
-  }
-
-  activePostId = postId;
-  const replyText = "👆Yokarky koda 5je like basyň täze kod goyjak♥️✅️";
+// --- Loop sending messages every minute ---
+function startLoop() {
+  const text = "👆Yokarky koda 5je like basyň täze kod goyjak♥️✅️";
 
   async function loop() {
     try {
-      if (!activePostId) return;
-
-      // Send reply directly under channel post
-      const replyResp = await fetch(`${TELEGRAM_API}/sendMessage`, {
+      const resp = await fetch(`${TELEGRAM_API}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: TARGET_CHANNEL,
-          text: replyText,
-          reply_to_message_id: activePostId,
+          text: text,
         }),
       });
 
-      const replyData = await replyResp.json();
-      if (!replyData.ok) {
-        console.error("Failed to send reply:", replyData);
-        return;
-      }
+      const data = await resp.json();
+      if (!data.ok) return;
 
-      const replyMsgId = replyData.result.message_id;
+      const msgId = data.result.message_id;
 
-      // Delete after 60s
+      // Delete after 60 seconds
       setTimeout(async () => {
         await fetch(`${TELEGRAM_API}/deleteMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             chat_id: TARGET_CHANNEL,
-            message_id: replyMsgId,
+            message_id: msgId,
           }),
         });
       }, 60_000);
+
     } catch (e) {
-      console.error("Reply loop error:", e);
+      console.error("Loop error:", e);
     }
   }
 
-  // Run loop forever every 61s
-  activeLoop = setInterval(loop, 61_000);
-  loop(); // run immediately
+  // Run immediately + every 61s
+  loop();
+  setInterval(loop, 61_000);
 }
+
+// Start the loop as soon as the bot runs
+startLoop();
 
 // --- Webhook server ---
 serve(async (req: Request) => {
@@ -100,7 +86,6 @@ serve(async (req: Request) => {
   let text = "";
 
   if (update.message) {
-    // private/group message
     const msg = update.message;
     fromUsername = msg.forward_from_chat?.username
       ? `@${msg.forward_from_chat.username}`
@@ -109,23 +94,17 @@ serve(async (req: Request) => {
     fromChatId = msg.chat.id;
     text = msg.text ?? "";
   } else if (update.channel_post) {
-    // 🔥 new channel post
     const post = update.channel_post;
     fromUsername = `@${post.chat?.username}`;
     messageId = post.message_id;
     fromChatId = post.chat.id;
     text = post.text ?? post.caption ?? "";
-
-    // If new post in @MasakoffVpns, restart reply loop
-    if (`@${post.chat.username}`.toLowerCase() === TARGET_CHANNEL.toLowerCase()) {
-      startReplyingLoop(messageId);
-    }
   }
 
   // Footer with original channel/username
   const footer = `\n\n📌 Çeşme: ${fromUsername}`;
 
-  // Forward if from source channel or specific users
+  // Forward messages from source channels or specific users
   if (
     SOURCE_CHANNELS.some((c) => c.toLowerCase() === fromUsername.toLowerCase()) ||
     SPECIFIC_USERS.some(
@@ -151,15 +130,3 @@ serve(async (req: Request) => {
 
   return new Response("ok");
 });
-
-
-
-
-
-
-
-
-
-
-
-
