@@ -61,47 +61,44 @@ serve(async (req: Request) => {
 
   const update = await req.json();
 
-  // --- Handle private messages ---
+  // --- Handle private messages / forwarded posts ---
   if (update.message) {
     const msg = update.message;
     const isBot = msg.from?.is_bot;
     if (isBot) return new Response("ok");
 
-    // --- Forwarded messages from channels/users ---
-    if (msg.forward_from_chat) {
-      const fwdUsername = msg.forward_from_chat.username
+    // --- If message is forwarded ---
+    if (msg.forward_from_chat || msg.forward_from_message_id) {
+      const fwdUsername = msg.forward_from_chat?.username
         ? `@${msg.forward_from_chat.username}`
-        : "";
+        : "Unknown";
 
-      if (
-        SOURCE_CHANNELS.map(c => c.toLowerCase()).includes(fwdUsername.toLowerCase()) ||
-        SPECIFIC_USERS.map(u => u.replace("@", "").toLowerCase()).includes(fwdUsername.toLowerCase())
-      ) {
-        const content = msg.text ?? msg.caption ?? "";
-        if (content) {
-          // Add footer
-          const footer = `\n\n📌 Çeşme: ${fwdUsername}`;
-          await fetch(`${TELEGRAM_API}/sendMessage`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              chat_id: PRIVATE_CHAT_ID,
-              text: content + footer,
-              parse_mode: "HTML",
-            }),
-          });
-        }
-      }
-    } else {
-      // If you just send a normal message to bot, also echo with footer
-      const content = msg.text ?? "";
-      if (content) {
+      const footer = `\n\n📌 Çeşme: ${fwdUsername}`;
+
+      // If text message
+      if (msg.text) {
         await fetch(`${TELEGRAM_API}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             chat_id: PRIVATE_CHAT_ID,
-            text: content,
+            text: msg.text + footer,
+            parse_mode: "HTML",
+          }),
+        });
+      }
+
+      // If media (photo/video/document), copy it with footer
+      else if (msg.photo || msg.video || msg.document) {
+        await fetch(`${TELEGRAM_API}/copyMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: PRIVATE_CHAT_ID,
+            from_chat_id: msg.chat.id,
+            message_id: msg.message_id,
+            caption: footer,
+            parse_mode: "HTML",
           }),
         });
       }
@@ -122,5 +119,6 @@ serve(async (req: Request) => {
 
   return new Response("ok");
 });
+
 
 
