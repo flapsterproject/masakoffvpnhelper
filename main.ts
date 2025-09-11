@@ -30,13 +30,24 @@ async function copyMessageWithFooter(fromChat: string, messageId: number, toChat
 // --- Infinite reply loop ---
 async function replyLoop() {
   try {
-    // Get recent updates (to find last channel post)
-    const updates = await fetch(`${TELEGRAM_API}/getUpdates?limit=1&offset=-1`);
-    const updatesData = await updates.json();
-    const lastUpdate = updatesData.result?.[0];
-    if (!lastUpdate?.channel_post) return;
+    // Get last post from target channel
+    const resp = await fetch(`${TELEGRAM_API}/getChatHistory`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: TARGET_CHANNEL,
+        limit: 1, // just the last message
+      }),
+    });
 
-    const lastPostId = lastUpdate.channel_post.message_id;
+    const data = await resp.json();
+    if (!data.ok || !data.result?.messages?.length) {
+      console.error("No messages found in channel:", data);
+      return;
+    }
+
+    const lastPost = data.result.messages[0];
+    const lastPostId = lastPost.message_id;
 
     // Reply text
     const replyText = "👆Yokarky koda 5je like basyň täze kod goyjak♥️✅️";
@@ -51,8 +62,13 @@ async function replyLoop() {
         reply_to_message_id: lastPostId,
       }),
     });
+
     const replyData = await replyResp.json();
-    if (!replyData.ok) return;
+    if (!replyData.ok) {
+      console.error("Failed to send reply:", replyData);
+      return;
+    }
+
     const replyMsgId = replyData.result.message_id;
 
     // Delete after 60 seconds
@@ -140,6 +156,7 @@ serve(async (req: Request) => {
 
   return new Response("ok");
 });
+
 
 
 
