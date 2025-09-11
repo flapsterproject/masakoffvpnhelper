@@ -14,9 +14,9 @@ const SPECIFIC_USERS = ["@amangeldimasakov", "@Tm_happ_kripto"];
 
 const LOOP_TEXT = "👆Yokarky koda 5je like basyň täze kod goyjak♥️✅️";
 
-// Track last reply ID in the channel
+// Track last bot reply
 let lastReplyId: number | null = null;
-// Track current post ID bot is replying to
+// Track current post bot replies to
 let currentPostId: number | null = null;
 
 // --- Copy media with footer ---
@@ -49,7 +49,7 @@ async function replyToPost(postId: number) {
       });
     }
 
-    // Send new reply
+    // Send new reply under the post
     const resp = await fetch(`${TELEGRAM_API}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -82,7 +82,7 @@ serve(async (req: Request) => {
 
   let fromUsername = "";
   let messageId = 0;
-  let fromChatId = "";
+  let fromChatId = 0;
   let text = "";
 
   if (update.message) {
@@ -96,12 +96,12 @@ serve(async (req: Request) => {
 
     // --- Handle /bot command ---
     if (text?.trim() === "/bot" && msg.reply_to_message) {
-      // Delete user's /bot message immediately
+      // Delete /bot message immediately from the same chat
       await fetch(`${TELEGRAM_API}/deleteMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          chat_id: TARGET_CHANNEL,
+          chat_id: msg.chat.id,
           message_id: messageId,
         }),
       });
@@ -118,7 +118,7 @@ serve(async (req: Request) => {
     fromChatId = post.chat.id;
     text = post.text ?? post.caption ?? "";
 
-    // If new post in target channel and bot not manually assigned, start replying
+    // If new post in target channel and bot not assigned manually, start replying
     if (fromUsername.toLowerCase() === TARGET_CHANNEL.toLowerCase() && currentPostId === null) {
       replyToPost(messageId);
     }
@@ -126,7 +126,7 @@ serve(async (req: Request) => {
 
   const footer = `\n\n📌 Çeşme: ${fromUsername}`;
 
-  // Forward messages from sources or specific users
+  // Forward messages from source channels or specific users
   if (
     SOURCE_CHANNELS.some((c) => c.toLowerCase() === fromUsername.toLowerCase()) ||
     SPECIFIC_USERS.some(
@@ -152,6 +152,7 @@ serve(async (req: Request) => {
 
   return new Response("ok");
 });
+
 
 
 
