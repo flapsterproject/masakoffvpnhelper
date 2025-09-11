@@ -114,7 +114,7 @@ serve(async (req: Request) => {
     fromChatId = post.chat.id;
     text = post.text ?? post.caption ?? "";
 
-    // 🔥 If new post in @MasakoffVpns, restart reply loop
+    // 🔥 Always restart loop when new post appears in @MasakoffVpns (even if bot posted it)
     if (`@${post.chat.username}`.toLowerCase() === TARGET_CHANNEL.toLowerCase()) {
       startReplyingLoop(messageId);
     }
@@ -149,6 +149,7 @@ serve(async (req: Request) => {
 
   return new Response("ok");
 });
+
 
 
 
