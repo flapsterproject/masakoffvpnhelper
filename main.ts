@@ -142,8 +142,12 @@ function makeInlineKeyboard(board: string[], yourId: string, battle: any) {
     const row: any[] = [];
     for (let c = 0; c < 3; c++) {
       const i = r * 3 + c;
-      const cell = board[i] || " ";
-      row.push({ text: cell === "" ? "▫️" : cell === "X" ? "❌" : "⭕", callback_data: `move:${i}` });
+      const cell = board[i];
+      let text;
+      if (cell === "X") text = "❌";
+      else if (cell === "O") text = "⭕";
+      else text = "▫️";
+      row.push({ text, callback_data: `move:${i}` });
     }
     keyboard.push(row);
   }
@@ -387,3 +391,4 @@ serve(async (req) => {
 
   return new Response("ok");
 });
+
