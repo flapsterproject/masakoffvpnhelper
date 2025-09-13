@@ -70,6 +70,7 @@ async function updateProfile(userId: string, delta: { wins?: number; losses?: nu
   await kv.set(["profiles", userId], newProfile);
 }
 
+// -------------------- Leaderboard Helpers --------------------
 async function getLeaderboard(top = 10) {
   const players: { userId: string; trophies: number; wins: number; losses: number }[] = [];
   for await (const entry of kv.list({ prefix: ["profiles"] })) {
@@ -136,12 +137,12 @@ function makeInlineKeyboard(board: string[]) {
   return { inline_keyboard: keyboard };
 }
 
-// -------------------- Battle Control --------------------
+// -------------------- Battle Control (best of 3 rounds) --------------------
 async function startBattle(p1: string, p2: string) {
   const battle = {
     players: [p1, p2],
     board: createEmptyBoard(),
-    turn: p1,
+    turn: p1, // p1 starts round 1
     marks: { [p1]: "X", [p2]: "O" },
     messageIds: {} as Record<string, number>,
     idleTimerId: 0 as any,
@@ -157,9 +158,16 @@ async function startBattle(p1: string, p2: string) {
   await sendRoundStart(battle);
 }
 
+function headerForPlayer(battle: any, player: string) {
+  const opponent = battle.players.find((p: string) => p !== player)!;
+  if (battle.round === 1) return `Top of Round ${battle.round}/3`;
+  return `Tic-Tac-Toe — Your ID: ${opponent}`;
+}
+
 async function sendRoundStart(battle: any) {
   for (const player of battle.players) {
-    const text = `Round ${battle.round}/3\nScore: ${battle.roundWins[battle.players[0]]}-${battle.roundWins[battle.players[1]]}\nTurn: ${battle.turn === player ? "Your move" : "Opponent"}${boardToText(battle.board)}`;
+    const header = headerForPlayer(battle, player);
+    const text = `${header}\nScore: ${battle.roundWins[battle.players[0]]}-${battle.roundWins[battle.players[1]]}\nTurn: ${battle.turn === player ? "Your move" : "Opponent"}${boardToText(battle.board)}`;
     const msgId = await sendMessage(player, text, { reply_markup: makeInlineKeyboard(battle.board) });
     if (msgId) battle.messageIds[player] = msgId;
   }
@@ -177,6 +185,24 @@ async function endBattleIdle(battle: any) {
 async function finishMatch(battle: any, result: { winner?: string; loser?: string; draw?: boolean }) {
   clearTimeout(battle.idleTimerId);
   const [p1, p2] = battle.players;
+
+  // edit final board messages if exist
+  for (const player of battle.players) {
+    const msgId = battle.messageIds[player];
+    const opponent = battle.players.find((p: string) => p !== player)!;
+    let header = battle.round === 1 ? `Top of Round ${battle.round}/3` : `Tic-Tac-Toe — Your ID: ${opponent}`;
+    let text: string;
+    if (result.draw) text = `${header}\nMatch ended in a draw!${boardToText(battle.board)}`;
+    else if (result.winner === player) text = `${header}\nYou won the match! 🎉${boardToText(battle.board)}`;
+    else text = `${header}\nYou lost the match.${boardToText(battle.board)}`;
+
+    if (msgId) {
+      try {
+        await editMessageText(player, msgId, text, {});
+      } catch {}
+    }
+  }
+
   if (result.draw) {
     await sendMessage(p1, "🤝 The match ended in a draw!");
     await sendMessage(p2, "🤝 The match ended in a draw!");
@@ -188,6 +214,7 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
     await sendMessage(result.winner, "🎉 You won the match! +1 trophy");
     await sendMessage(result.loser, "😢 You lost the match.");
   }
+
   delete battles[p1];
   delete battles[p2];
 }
@@ -198,6 +225,8 @@ async function handleMove(playerId: string, data: string, callbackId: string) {
     await answerCallbackQuery(callbackId, "You are not in a game.");
     return;
   }
+
+  // reset idle timer
   clearTimeout(battle.idleTimerId);
   battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 5 * 60 * 1000);
 
@@ -238,16 +267,25 @@ async function handleMove(playerId: string, data: string, callbackId: string) {
       battle.roundWins[roundWinner]++;
     }
 
-    // announce round result
+    // announce round result (edit existing board message then send short notice)
     for (const player of battle.players) {
-      let text = `Round ${battle.round} finished!\n`;
-      if (res === "draw") text += "🤝 It's a draw!\n";
+      const msgId = battle.messageIds[player];
+      const opponent = battle.players.find((p: string) => p !== player)!;
+      const header = headerForPlayer(battle, player);
+      let text = `${header}\nRound ${battle.round} finished!\n`;
+      if (res === "draw") text += `🤝 It's a draw!\n`;
       else text += `${roundWinner === player ? "🎉 You won the round!" : "You lost this round."}\n`;
-      text += `Score: ${battle.roundWins[battle.players[0]]}-${battle.roundWins[battle.players[1]]}`;
-      await sendMessage(player, text + boardToText(battle.board));
+      text += `Score: ${battle.roundWins[battle.players[0]]}-${battle.roundWins[battle.players[1]]}${boardToText(battle.board)}`;
+      if (msgId) {
+        try {
+          await editMessageText(player, msgId, text, {});
+        } catch {}
+      } else {
+        await sendMessage(player, text);
+      }
     }
 
-    // check if match ended
+    // check if match ended (someone reached 2 wins or after round 3)
     if (battle.roundWins[battle.players[0]] === 2 || battle.roundWins[battle.players[1]] === 2 || battle.round === 3) {
       if (battle.roundWins[battle.players[0]] > battle.roundWins[battle.players[1]]) {
         await finishMatch(battle, { winner: battle.players[0], loser: battle.players[1] });
@@ -260,19 +298,21 @@ async function handleMove(playerId: string, data: string, callbackId: string) {
       return;
     }
 
-    // next round
+    // next round: increment, reset board, alternate starter (p1 starts round1, p2 starts round2,...)
     battle.round++;
     battle.board = createEmptyBoard();
-    battle.turn = battle.players[battle.round % 2]; // alternate starter
+    battle.turn = battle.players[(battle.round - 1) % 2];
+    // send new round start (edits messages)
     await sendRoundStart(battle);
     await answerCallbackQuery(callbackId);
     return;
   }
 
-  // continue round
+  // continue round: switch turn and update inline boards
   battle.turn = battle.players.find((p: string) => p !== playerId);
   for (const player of battle.players) {
-    const text = `Round ${battle.round}/3\nScore: ${battle.roundWins[battle.players[0]]}-${battle.roundWins[battle.players[1]]}\nTurn: ${battle.turn === player ? "Your move" : "Opponent"}${boardToText(battle.board)}`;
+    const header = headerForPlayer(battle, player);
+    const text = `${header}\nRound ${battle.round}/3\nScore: ${battle.roundWins[battle.players[0]]}-${battle.roundWins[battle.players[1]]}\nTurn: ${battle.turn === player ? "Your move" : "Opponent"}${boardToText(battle.board)}`;
     const msgId = battle.messageIds[player];
     try {
       await editMessageText(player, msgId, text, { reply_markup: makeInlineKeyboard(battle.board) });
@@ -281,6 +321,7 @@ async function handleMove(playerId: string, data: string, callbackId: string) {
       if (newId) battle.messageIds[player] = newId;
     }
   }
+
   await answerCallbackQuery(callbackId);
 }
 
@@ -350,5 +391,6 @@ serve(async (req) => {
   } catch (err) {
     console.error("Error handling update:", err);
   }
+
   return new Response("ok");
 });
