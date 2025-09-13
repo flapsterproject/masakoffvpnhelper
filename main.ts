@@ -8,7 +8,7 @@ import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 // Telegram setup
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 const API = `https://api.telegram.org/bot${TOKEN}`;
-const SECRET_PATH = "/masakoffvpnhelper"; // change if needed
+const SECRET_PATH = "/masakoffvpnhelper";
 
 // Deno KV
 const kv = await Deno.openKv();
@@ -18,7 +18,7 @@ const ADMIN_USERNAME = "@amangeldimasakov";
 
 // In-memory matchmaking and battles
 let queue: string[] = [];
-const battles: Record<string, any> = {}; // playerId -> battle
+const battles: Record<string, any> = {};
 
 // -------------------- Telegram Helpers --------------------
 async function sendMessage(chatId: string, text: string, options: any = {}) {
@@ -142,7 +142,7 @@ async function startBattle(p1: string, p2: string) {
   const battle = {
     players: [p1, p2],
     board: createEmptyBoard(),
-    turn: p1, // p1 starts round 1
+    turn: p1,
     marks: { [p1]: "X", [p2]: "O" },
     messageIds: {} as Record<string, number>,
     idleTimerId: 0 as any,
@@ -160,7 +160,7 @@ async function startBattle(p1: string, p2: string) {
 
 function headerForPlayer(battle: any, player: string) {
   const opponent = battle.players.find((p: string) => p !== player)!;
-  if (battle.round === 1) return `Top of Round ${battle.round}/3`;
+  if (battle.round === 1) return `Tic-Tac-Toe — Your ID: ${player}\nTop of Round ${battle.round}/3`;
   return `Tic-Tac-Toe — Your ID: ${opponent}`;
 }
 
@@ -186,20 +186,17 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
   clearTimeout(battle.idleTimerId);
   const [p1, p2] = battle.players;
 
-  // edit final board messages if exist
   for (const player of battle.players) {
     const msgId = battle.messageIds[player];
     const opponent = battle.players.find((p: string) => p !== player)!;
-    let header = battle.round === 1 ? `Top of Round ${battle.round}/3` : `Tic-Tac-Toe — Your ID: ${opponent}`;
+    const header = headerForPlayer(battle, player);
     let text: string;
     if (result.draw) text = `${header}\nMatch ended in a draw!${boardToText(battle.board)}`;
     else if (result.winner === player) text = `${header}\nYou won the match! 🎉${boardToText(battle.board)}`;
     else text = `${header}\nYou lost the match.${boardToText(battle.board)}`;
 
     if (msgId) {
-      try {
-        await editMessageText(player, msgId, text, {});
-      } catch {}
+      try { await editMessageText(player, msgId, text, {}); } catch {}
     }
   }
 
@@ -226,7 +223,6 @@ async function handleMove(playerId: string, data: string, callbackId: string) {
     return;
   }
 
-  // reset idle timer
   clearTimeout(battle.idleTimerId);
   battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 5 * 60 * 1000);
 
@@ -252,11 +248,9 @@ async function handleMove(playerId: string, data: string, callbackId: string) {
     return;
   }
 
-  // apply move
   const mark = battle.marks[playerId];
   battle.board[idx] = mark;
 
-  // check result
   const res = checkWin(battle.board);
   if (res === "X" || res === "O" || res === "draw") {
     let roundWinner: string | undefined;
@@ -267,25 +261,20 @@ async function handleMove(playerId: string, data: string, callbackId: string) {
       battle.roundWins[roundWinner]++;
     }
 
-    // announce round result (edit existing board message then send short notice)
     for (const player of battle.players) {
       const msgId = battle.messageIds[player];
-      const opponent = battle.players.find((p: string) => p !== player)!;
       const header = headerForPlayer(battle, player);
       let text = `${header}\nRound ${battle.round} finished!\n`;
       if (res === "draw") text += `🤝 It's a draw!\n`;
       else text += `${roundWinner === player ? "🎉 You won the round!" : "You lost this round."}\n`;
       text += `Score: ${battle.roundWins[battle.players[0]]}-${battle.roundWins[battle.players[1]]}${boardToText(battle.board)}`;
       if (msgId) {
-        try {
-          await editMessageText(player, msgId, text, {});
-        } catch {}
+        try { await editMessageText(player, msgId, text, {}); } catch {}
       } else {
         await sendMessage(player, text);
       }
     }
 
-    // check if match ended (someone reached 2 wins or after round 3)
     if (battle.roundWins[battle.players[0]] === 2 || battle.roundWins[battle.players[1]] === 2 || battle.round === 3) {
       if (battle.roundWins[battle.players[0]] > battle.roundWins[battle.players[1]]) {
         await finishMatch(battle, { winner: battle.players[0], loser: battle.players[1] });
@@ -298,17 +287,14 @@ async function handleMove(playerId: string, data: string, callbackId: string) {
       return;
     }
 
-    // next round: increment, reset board, alternate starter (p1 starts round1, p2 starts round2,...)
     battle.round++;
     battle.board = createEmptyBoard();
     battle.turn = battle.players[(battle.round - 1) % 2];
-    // send new round start (edits messages)
     await sendRoundStart(battle);
     await answerCallbackQuery(callbackId);
     return;
   }
 
-  // continue round: switch turn and update inline boards
   battle.turn = battle.players.find((p: string) => p !== playerId);
   for (const player of battle.players) {
     const header = headerForPlayer(battle, player);
@@ -334,7 +320,6 @@ serve(async (req) => {
       const chatId = String(update.message.chat.id);
       const text = update.message.text;
 
-      // Admin command
       if (text?.startsWith("/addtouser")) {
         const fromUsername = update.message.from.username ? `@${update.message.from.username}` : "";
         if (fromUsername !== ADMIN_USERNAME) {
@@ -346,9 +331,8 @@ serve(async (req) => {
           } else {
             const targetUserId = parts[1];
             const amount = parseInt(parts[2]);
-            if (isNaN(amount)) {
-              await sendMessage(chatId, "❌ Amount must be a number.");
-            } else {
+            if (isNaN(amount)) await sendMessage(chatId, "❌ Amount must be a number.");
+            else {
               await initProfile(targetUserId);
               await updateProfile(targetUserId, { wins: amount });
               await sendMessage(chatId, `✅ Added ${amount} win(s) to user ${targetUserId}`);
@@ -357,13 +341,10 @@ serve(async (req) => {
         }
       }
 
-      // Player commands
       if (text === "/battle") {
-        if (battles[chatId]) {
-          await sendMessage(chatId, "⚔️ You are already in a game!");
-        } else if (queue.includes(chatId)) {
-          await sendMessage(chatId, "⌛ You are already searching for an opponent...");
-        } else if (queue.length > 0 && queue[0] !== chatId) {
+        if (battles[chatId]) await sendMessage(chatId, "⚔️ You are already in a game!");
+        else if (queue.includes(chatId)) await sendMessage(chatId, "⌛ You are already searching for an opponent...");
+        else if (queue.length > 0 && queue[0] !== chatId) {
           const opponent = queue.shift()!;
           startBattle(chatId, opponent);
         } else {
@@ -394,3 +375,4 @@ serve(async (req) => {
 
   return new Response("ok");
 });
+
