@@ -13,8 +13,7 @@ const SECRET_PATH = "/masakoffvpnhelper";
 
 // Deno KV
 const kv = await Deno.openKv();
-// Note: admin check kept by username for now — change to ADMIN_ID if you prefer numeric ID
-const ADMIN_USERNAME = "@amangeldimasakov";
+const ADMIN_USERNAME = "@amangeldimasakov"; // keep as username check, change to ADMIN_ID if you want id-based admin
 
 let queue: string[] = [];
 const battles: Record<string, any> = {};
@@ -43,6 +42,7 @@ async function editMessageText(chatId: string, messageId: number, text: string, 
       body: JSON.stringify({ chat_id: chatId, message_id: messageId, text, ...options }),
     });
   } catch (e) {
+    // It's common for edit to fail (message deleted or too old) — ignore but log
     console.warn("editMessageText failed", e?.message ?? e);
   }
 }
@@ -72,9 +72,9 @@ type Profile = {
   lastActive: number;
 };
 
-// ALWAYS show numeric user id (string) instead of username/display name
 function getDisplayName(p: Profile) {
-  return `${p.id}`;
+  // Return only the Telegram numeric user id as requested
+  return `ID:${p.id}`;
 }
 
 async function initProfile(userId: string, username?: string, displayName?: string) {
@@ -84,7 +84,7 @@ async function initProfile(userId: string, username?: string, displayName?: stri
     const profile: Profile = {
       id: userId,
       username,
-      displayName: userId, // keep displayName equal to id by default
+      displayName: displayName || userId,
       trophies: 1000,
       gamesPlayed: 0,
       wins: 0,
@@ -95,13 +95,17 @@ async function initProfile(userId: string, username?: string, displayName?: stri
     await kv.set(key, profile);
     return profile;
   } else {
+    // Update username/displayName if provided and different
     const existing = value.value as Profile;
     let changed = false;
     if (username && username !== existing.username) {
       existing.username = username;
       changed = true;
     }
-    // we do NOT overwrite displayName with textual names — keep ID as displayName
+    if (displayName && displayName !== existing.displayName) {
+      existing.displayName = displayName;
+      changed = true;
+    }
     existing.lastActive = Date.now();
     if (changed) await kv.set(key, existing);
     return existing;
@@ -175,7 +179,7 @@ async function sendLeaderboard(chatId: string, page = 0) {
   let msg = `🏆 Leaderboard — Page ${page + 1}\n\n`;
   topPlayers.forEach((p, i) => {
     const rankNum = offset + i + 1;
-    const name = getDisplayName(p); // will be the numeric id
+    const name = getDisplayName(p); // will show ID:xxx
     const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
     msg += `${rankNum}. ${name} — 🏆 ${p.trophies} | Wins: ${p.wins}, Losses: ${p.losses}, Draws: ${p.draws} | WinRate: ${winRate}%\n`;
   });
@@ -220,6 +224,7 @@ function makeInlineKeyboard(board: string[]) {
       const i = r * 3 + c;
       const cell = board[i];
       let text = cell === "X" ? "❌" : cell === "O" ? "⭕" : "▫️";
+      // callback contains move index
       row.push({ text, callback_data: `move:${i}` });
     }
     keyboard.push(row);
@@ -246,6 +251,7 @@ async function startBattle(p1: string, p2: string) {
   await initProfile(p1);
   await initProfile(p2);
 
+  // Messages show IDs only (p1 and p2 are strings of the user ids)
   await sendMessage(p1, `Opponent found! You are ❌ (X). Best of 3 rounds vs ${p2}`);
   await sendMessage(p2, `Opponent found! You are ⭕ (O). Best of 3 rounds vs ${p1}`);
   await sendRoundStart(battle);
@@ -253,8 +259,7 @@ async function startBattle(p1: string, p2: string) {
 
 function headerForPlayer(battle: any, player: string) {
   const opponent = battle.players.find((p: string) => p !== player)!;
-  // Show numeric id of opponent
-  return `Tic-Tac-Toe — You vs ${opponent}`;
+  return `Tic-Tac-Toe — You vs ${opponent}`; // opponent is id
 }
 
 async function sendRoundStart(battle: any) {
@@ -264,14 +269,15 @@ async function sendRoundStart(battle: any) {
     const msgId = await sendMessage(player, text, { reply_markup: makeInlineKeyboard(battle.board) });
     if (msgId) battle.messageIds[player] = msgId;
   }
+  // idle timeout (5 minutes)
   if (battle.idleTimerId) clearTimeout(battle.idleTimerId);
   battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 5 * 60 * 1000);
 }
 
 async function endBattleIdle(battle: any) {
   const [p1, p2] = battle.players;
-  await sendMessage(p1, "⚠️ Game ended due to inactivity (5 minutes).\n");
-  await sendMessage(p2, "⚠️ Game ended due to inactivity (5 minutes).\n");
+  await sendMessage(p1, "⚠️ Game ended due to inactivity (5 minutes).");
+  await sendMessage(p2, "⚠️ Game ended due to inactivity (5 minutes).");
   delete battles[p1];
   delete battles[p2];
 }
@@ -317,6 +323,7 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
 // improved handleCallback to allow non-battle callbacks (leaderboard) and battle moves
 async function handleCallback(fromId: string, data: string, callbackId: string) {
   try {
+    // Leaderboard navigation — works even if user not in a battle
     if (data.startsWith("leaderboard:")) {
       const page = parseInt(data.split(":")[1]) || 0;
       await sendLeaderboard(fromId, page);
@@ -324,16 +331,20 @@ async function handleCallback(fromId: string, data: string, callbackId: string) 
       return;
     }
 
+    // Not a battle specific action? surrender/move require a battle
     const battle = battles[fromId];
     if (!battle) {
+      // If user clicks 'Surrender' but isn't in a game, inform them
       if (data === "surrender") {
         await answerCallbackQuery(callbackId, "You are not in a game.");
         return;
       }
+      // other unknown callback — just acknowledge
       await answerCallbackQuery(callbackId);
       return;
     }
 
+    // reset idle timer
     if (battle.idleTimerId) clearTimeout(battle.idleTimerId);
     battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 5 * 60 * 1000);
 
@@ -381,6 +392,7 @@ async function handleCallback(fromId: string, data: string, callbackId: string) 
         else await sendMessage(player, text);
       }
 
+      // Check match end (first to 2 or after 3 rounds)
       if (battle.roundWins[battle.players[0]] === 2 || battle.roundWins[battle.players[1]] === 2 || battle.round === 3) {
         if (battle.roundWins[battle.players[0]] > battle.roundWins[battle.players[1]]) {
           await finishMatch(battle, { winner: battle.players[0], loser: battle.players[1] });
@@ -393,14 +405,17 @@ async function handleCallback(fromId: string, data: string, callbackId: string) 
         return;
       }
 
+      // Next round
       battle.round++;
       battle.board = createEmptyBoard();
+      // alternate who starts each round: round 1 -> players[0], round 2 -> players[1], round 3 -> players[0]
       battle.turn = battle.players[(battle.round - 1) % 2];
       await sendRoundStart(battle);
       await answerCallbackQuery(callbackId);
       return;
     }
 
+    // normal move, switch turn
     battle.turn = battle.players.find((p: string) => p !== fromId)!;
     for (const player of battle.players) {
       const header = headerForPlayer(battle, player);
@@ -428,11 +443,13 @@ async function handleCallback(fromId: string, data: string, callbackId: string) 
 // -------------------- HTTP Handler --------------------
 serve(async (req) => {
   try {
+    // ensure correct webhook path
     const url = new URL(req.url);
     if (!url.pathname.endsWith(SECRET_PATH)) return new Response("Forbidden", { status: 403 });
 
     const update = await req.json();
 
+    // handle a normal message
     if (update.message) {
       const chatId = String(update.message.chat.id);
       const text = update.message.text ?? "";
@@ -440,8 +457,9 @@ serve(async (req) => {
       const username = from.username ? `@${from.username}` : undefined;
       const displayName = from.first_name ?? from.username ?? String(from.id);
 
-      // store profile keyed by Telegram user id
       await initProfile(String(from.id), username, displayName);
+      // NOTE: we store profiles keyed by Telegram user id (not chat id), so pass String(from.id)
+      // For commands used in private chats, chatId == from.id; for groups they'd differ.
 
       // Admin command: /addtouser <userid> <amount> (admin ONLY)
       if (text.startsWith("/addtouser")) {
@@ -491,6 +509,7 @@ serve(async (req) => {
       }
     }
 
+    // handle callback_query
     if (update.callback_query) {
       const fromId = String(update.callback_query.from.id);
       const data = update.callback_query.data;
