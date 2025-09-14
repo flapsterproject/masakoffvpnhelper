@@ -1,23 +1,19 @@
 // main.ts
 // Telegram Tic-Tac-Toe Bot (Deno)
 // Features: matchmaking (/battle), private-game with inline buttons,
-// profiles with stats (Deno KV), leaderboard, admin (/addtouser)
+// profiles with stats (Deno KV), leaderboard with pagination, admin (/addtouser)
 // Match = best of 3 rounds
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
-// Telegram setup
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
 // Deno KV
 const kv = await Deno.openKv();
-
-// Admin username
 const ADMIN_USERNAME = "@amangeldimasakov";
 
-// In-memory matchmaking and battles
 let queue: string[] = [];
 const battles: Record<string, any> = {};
 
@@ -117,38 +113,53 @@ async function sendProfile(chatId: string) {
   await initProfile(chatId);
   const p = await getProfile(chatId);
   const date = new Date(p.lastActive).toLocaleDateString();
+  const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
   const msg =
     `🏅 Profile of ${getDisplayName(p)}\n` +
     `Trophies: ${p.trophies} 🏆\n` +
     `Rank: ${getRank(p.trophies)}\n` +
     `Games: ${p.gamesPlayed}\n` +
     `Wins: ${p.wins} | Losses: ${p.losses} | Draws: ${p.draws}\n` +
+    `Win Rate: ${winRate}%\n` +
     `Last active: ${date}`;
   await sendMessage(chatId, msg);
 }
 
 // -------------------- Leaderboard Helpers --------------------
-async function getLeaderboard(top = 10) {
+async function getLeaderboard(top = 10, offset = 0) {
   const players: Profile[] = [];
   for await (const entry of kv.list({ prefix: ["profiles"] })) {
     players.push(entry.value as Profile);
   }
   players.sort((a, b) => b.trophies - a.trophies);
-  return players.slice(0, top);
+  return players.slice(offset, offset + top);
 }
 
-async function sendLeaderboard(chatId: string) {
-  const topPlayers = await getLeaderboard();
+async function sendLeaderboard(chatId: string, page = 0) {
+  const perPage = 10;
+  const offset = page * perPage;
+  const topPlayers = await getLeaderboard(perPage, offset);
+
   if (topPlayers.length === 0) {
     await sendMessage(chatId, "No players yet!");
     return;
   }
-  let msg = "🏆 Top Players:\n\n";
+
+  let msg = `🏆 Leaderboard — Page ${page + 1}\n\n`;
   topPlayers.forEach((p, i) => {
+    const rankNum = offset + i + 1;
     const name = getDisplayName(p);
-    msg += `${i + 1}. ${name} — 🏆 ${p.trophies} | Wins: ${p.wins} | Losses: ${p.losses}\n`;
+    const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
+    msg += `${rankNum}. ${name} — 🏆 ${p.trophies} | Wins: ${p.wins}, Losses: ${p.losses}, Draws: ${p.draws} | WinRate: ${winRate}%\n`;
   });
-  await sendMessage(chatId, msg);
+
+  const keyboard: any = { inline_keyboard: [] };
+  const row: any[] = [];
+  if (page > 0) row.push({ text: "⬅️ Prev", callback_data: `leaderboard:${page - 1}` });
+  if (topPlayers.length === perPage) row.push({ text: "Next ➡️", callback_data: `leaderboard:${page + 1}` });
+  if (row.length) keyboard.inline_keyboard.push(row);
+
+  await sendMessage(chatId, msg, { reply_markup: keyboard });
 }
 
 // -------------------- Game Logic --------------------
@@ -181,10 +192,7 @@ function makeInlineKeyboard(board: string[]) {
     for (let c = 0; c < 3; c++) {
       const i = r * 3 + c;
       const cell = board[i];
-      let text;
-      if (cell === "X") text = "❌";
-      else if (cell === "O") text = "⭕";
-      else text = "▫️";
+      let text = cell === "X" ? "❌" : cell === "O" ? "⭕" : "▫️";
       row.push({ text, callback_data: `move:${i}` });
     }
     keyboard.push(row);
@@ -210,7 +218,6 @@ async function startBattle(p1: string, p2: string) {
 
   await sendMessage(p1, `Opponent found! You are ❌ (X). Best of 3 rounds vs ${p2}`);
   await sendMessage(p2, `Opponent found! You are ⭕ (O). Best of 3 rounds vs ${p1}`);
-
   await sendRoundStart(battle);
 }
 
@@ -285,6 +292,13 @@ async function handleMove(playerId: string, data: string, callbackId: string) {
     const opponent = battle.players.find((p: string) => p !== playerId)!;
     await finishMatch(battle, { winner: opponent, loser: playerId });
     await answerCallbackQuery(callbackId, "You surrendered.");
+    return;
+  }
+
+  if (data.startsWith("leaderboard:")) {
+    const page = parseInt(data.split(":")[1]) || 0;
+    await sendLeaderboard(playerId, page);
+    await answerCallbackQuery(callbackId);
     return;
   }
 
@@ -367,6 +381,8 @@ async function handleMove(playerId: string, data: string, callbackId: string) {
 // -------------------- HTTP Handler --------------------
 serve(async (req) => {
   try {
+    if (!req.url.endsWith(SECRET_PATH)) return new Response("Forbidden", { status: 403 });
+
     const update = await req.json();
 
     if (update.message) {
@@ -416,7 +432,7 @@ serve(async (req) => {
       }
 
       if (text === "/leaderboard") {
-        await sendLeaderboard(chatId);
+        await sendLeaderboard(chatId, 0);
       }
     }
 
@@ -431,6 +447,7 @@ serve(async (req) => {
 
   return new Response("ok");
 });
+
 
 
 
