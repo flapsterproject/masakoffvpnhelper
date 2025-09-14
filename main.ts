@@ -83,7 +83,7 @@ async function initProfile(userId: string, username?: string, displayName?: stri
       id: userId,
       username,
       displayName: displayName || userId,
-      trophies: 1000,
+      trophies: 0,
       gamesPlayed: 0,
       wins: 0,
       losses: 0,
@@ -119,7 +119,7 @@ async function updateProfile(userId: string, delta: Partial<Profile>) {
   const newProfile: Profile = {
     ...existing,
     ...delta,
-    trophies: (existing.trophies || 1000) + (delta.trophies ?? 0),
+    trophies: (existing.trophies || 0) + (delta.trophies ?? 0),
     gamesPlayed: (existing.gamesPlayed || 0) + (delta.gamesPlayed ?? 0),
     wins: (existing.wins || 0) + (delta.wins ?? 0),
     losses: (existing.losses || 0) + (delta.losses ?? 0),
@@ -304,8 +304,8 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
     const loser = result.loser!;
     await initProfile(winner);
     await initProfile(loser);
-    await updateProfile(winner, { gamesPlayed: 1, wins: 1, trophies: 10 });
-    await updateProfile(loser, { gamesPlayed: 1, losses: 1, trophies: -5 });
+    await updateProfile(winner, { gamesPlayed: 1, wins: 1, trophies: 0.85 });
+    await updateProfile(loser, { gamesPlayed: 1, losses: 1, trophies: -1 });
     await sendMessage(winner, `🎉 You won the match! +10 trophies (vs ID:${loser})`);
     await sendMessage(loser, `😢 You lost the match. -5 trophies (vs ID:${winner})`);
   }
