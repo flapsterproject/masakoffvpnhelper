@@ -61,6 +61,10 @@ type Profile = {
   lastActive: number;
 };
 
+function getDisplayName(p: Profile) {
+  return p.username || p.displayName || `User${p.id}`;
+}
+
 async function initProfile(userId: string, username?: string, displayName?: string) {
   const value = await kv.get(["profiles", userId]);
   if (!value.value) {
@@ -114,7 +118,7 @@ async function sendProfile(chatId: string) {
   const p = await getProfile(chatId);
   const date = new Date(p.lastActive).toLocaleDateString();
   const msg =
-    `🏅 Profile of ${p.username || p.displayName}\n` +
+    `🏅 Profile of ${getDisplayName(p)}\n` +
     `Trophies: ${p.trophies} 🏆\n` +
     `Rank: ${getRank(p.trophies)}\n` +
     `Games: ${p.gamesPlayed}\n` +
@@ -141,7 +145,8 @@ async function sendLeaderboard(chatId: string) {
   }
   let msg = "🏆 Top Players:\n\n";
   topPlayers.forEach((p, i) => {
-    msg += `${i + 1}. ${p.username || p.displayName} — 🏆 ${p.trophies} | Wins: ${p.wins} | Losses: ${p.losses}\n`;
+    const name = getDisplayName(p);
+    msg += `${i + 1}. ${name} — 🏆 ${p.trophies} | Wins: ${p.wins} | Losses: ${p.losses}\n`;
   });
   await sendMessage(chatId, msg);
 }
@@ -211,7 +216,7 @@ async function startBattle(p1: string, p2: string) {
 
 function headerForPlayer(battle: any, player: string) {
   const opponent = battle.players.find((p: string) => p !== player)!;
-  return `Tic-Tac-Toe — Your ID: ${player}\nOpponent: ${opponent}`;
+  return `Tic-Tac-Toe — You vs ${opponent}`;
 }
 
 async function sendRoundStart(battle: any) {
@@ -420,11 +425,13 @@ serve(async (req) => {
       const data = update.callback_query.data;
       await handleMove(fromId, data, update.callback_query.id);
     }
-  } catch (err) {
-    console.error("Error handling update:", err);
+  } catch (e) {
+    console.error("Error handling update", e);
   }
 
   return new Response("ok");
 });
+
+
 
 
