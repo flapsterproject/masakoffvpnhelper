@@ -9,16 +9,13 @@ import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
-const SECRET_PATH = "/masakoffvpnhelper";
+const SECRET_PATH = "/checkersbot";
 
-// Deno KV
+// -------------------- Deno KV --------------------
 const kv = await Deno.openKv();
 const ADMIN_USERNAME = "@amangeldimasakov";
 
-let queue: string[] = [];
-const battles: Record<string, any> = {};
-
-// -------------------- Telegram Helpers --------------------
+// -------------------- Helpers --------------------
 async function sendMessage(chatId: string, text: string, options: any = {}): Promise<number | null> {
   try {
     const res = await fetch(`${API}/sendMessage`, {
@@ -58,7 +55,7 @@ async function answerCallbackQuery(id: string, text = "") {
   }
 }
 
-// -------------------- Profile Helpers --------------------
+// -------------------- Profiles --------------------
 type Profile = {
   id: string;
   username?: string;
@@ -94,17 +91,10 @@ async function initProfile(userId: string, username?: string, displayName?: stri
     return profile;
   } else {
     const existing = value.value as Profile;
-    let changed = false;
-    if (username && username !== existing.username) {
-      existing.username = username;
-      changed = true;
-    }
-    if (displayName && displayName !== existing.displayName) {
-      existing.displayName = displayName;
-      changed = true;
-    }
     existing.lastActive = Date.now();
-    if (changed) await kv.set(key, existing);
+    if (username) existing.username = username;
+    if (displayName) existing.displayName = displayName;
+    await kv.set(key, existing);
     return existing;
   }
 }
@@ -130,30 +120,7 @@ async function updateProfile(userId: string, delta: Partial<Profile>) {
   return newProfile;
 }
 
-function getRank(trophies: number) {
-  if (trophies < 1000) return "🥉 Bronze";
-  if (trophies < 1500) return "🥈 Silver";
-  if (trophies < 2000) return "🥇 Gold";
-  return "💎 Diamond";
-}
-
-async function sendProfile(chatId: string) {
-  await initProfile(chatId);
-  const p = (await getProfile(chatId))!;
-  const date = new Date(p.lastActive).toLocaleString();
-  const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
-  const msg =
-    `🏅 Profile of ${getDisplayName(p)}\n` +
-    `Trophies: ${p.trophies} 🏆\n` +
-    `Rank: ${getRank(p.trophies)}\n` +
-    `Games: ${p.gamesPlayed}\n` +
-    `Wins: ${p.wins} | Losses: ${p.losses} | Draws: ${p.draws}\n` +
-    `Win Rate: ${winRate}%\n` +
-    `Last active: ${date}`;
-  await sendMessage(chatId, msg);
-}
-
-// -------------------- Leaderboard Helpers --------------------
+// -------------------- Leaderboard --------------------
 async function getLeaderboard(top = 10, offset = 0) {
   const players: Profile[] = [];
   for await (const entry of kv.list({ prefix: ["profiles"] })) {
@@ -168,17 +135,13 @@ async function sendLeaderboard(chatId: string, page = 0) {
   const offset = page * perPage;
   const topPlayers = await getLeaderboard(perPage, offset);
 
-  if (topPlayers.length === 0) {
-    await sendMessage(chatId, "No players yet!");
-    return;
-  }
+  if (!topPlayers.length) return await sendMessage(chatId, "No players yet!");
 
   let msg = `🏆 Leaderboard — Page ${page + 1}\n\n`;
   topPlayers.forEach((p, i) => {
     const rankNum = offset + i + 1;
-    const name = getDisplayName(p);
     const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
-    msg += `${rankNum}. ${name} — 🏆 ${p.trophies} | Wins: ${p.wins}, Losses: ${p.losses}, Draws: ${p.draws} | WinRate: ${winRate}%\n`;
+    msg += `${rankNum}. ${getDisplayName(p)} — 🏆 ${p.trophies} | W:${p.wins} L:${p.losses} D:${p.draws} | WinRate:${winRate}%\n`;
   });
 
   const keyboard: any = { inline_keyboard: [] };
@@ -190,43 +153,79 @@ async function sendLeaderboard(chatId: string, page = 0) {
   await sendMessage(chatId, msg, { reply_markup: keyboard });
 }
 
-// -------------------- Checkers Game Logic --------------------
-const EMPTY = "⬛";
-const RED = "🔴";
-const BLUE = "🔵";
-const RED_KING = "👑"; // you can color for kings differently if you like
-const BLUE_KING = "👑";
+// -------------------- Checkers Board --------------------
+type BoardCell = "RED" | "BLUE" | "RED_KING" | "BLUE_KING" | "EMPTY" | "LIGHT";
 
-function createStartingBoard(): string[][] {
-  const board: string[][] = Array.from({ length: 8 }, () => Array(8).fill("⬜"));
-  for (let r = 0; r < 3; r++) {
+function createBoard(): BoardCell[][] {
+  const board: BoardCell[][] = [];
+  for (let r = 0; r < 8; r++) {
+    const row: BoardCell[] = [];
     for (let c = 0; c < 8; c++) {
-      if ((r + c) % 2 === 1) board[r][c] = BLUE;
+      if ((r + c) % 2 === 0) row.push("LIGHT");
+      else if (r < 3) row.push("BLUE");
+      else if (r > 4) row.push("RED");
+      else row.push("EMPTY");
     }
-  }
-  for (let r = 5; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
-      if ((r + c) % 2 === 1) board[r][c] = RED;
-    }
+    board.push(row);
   }
   return board;
 }
 
-function boardToText(board: string[][]) {
-  return board.map((row) => row.join("")).join("\n");
+function boardToText(board: BoardCell[][]) {
+  const map = {
+    RED: "🔴",
+    BLUE: "🔵",
+    RED_KING: "👑",
+    BLUE_KING: "👑",
+    EMPTY: "⬛",
+    LIGHT: "⬜",
+  };
+  return board.map((row) => row.map((c) => map[c]).join("")).join("\n");
 }
 
-// TODO: implement valid moves, captures, king promotion logic, inline buttons generation for moves
-// The rest of battle flow (startBattle, handleCallback, rounds, turn switching) is similar to Tic-Tac-Toe bot,
-// just adapted to 8x8 checkers board and RED/BLUE pieces
+// -------------------- Game State --------------------
+let queue: string[] = [];
+const battles: Record<string, any> = {}; // battle keyed by userId
+
+// -------------------- Helper for Inline Buttons --------------------
+function generateBoardKeyboard(board: BoardCell[][], selected: { r: number; c: number } | null = null) {
+  const keyboard: any[] = [];
+  for (let r = 0; r < 8; r++) {
+    const row: any[] = [];
+    for (let c = 0; c < 8; c++) {
+      const cell = board[r][c];
+      let text = "";
+      switch (cell) {
+        case "RED": text = "🔴"; break;
+        case "BLUE": text = "🔵"; break;
+        case "RED_KING": text = "👑"; break;
+        case "BLUE_KING": text = "👑"; break;
+        case "EMPTY": text = "⬛"; break;
+        case "LIGHT": text = "⬜"; break;
+      }
+      row.push({ text, callback_data: `cell:${r}:${c}` });
+    }
+    keyboard.push(row);
+  }
+  if (selected) keyboard.push([{ text: "Cancel", callback_data: "cancel" }]);
+  return { inline_keyboard: keyboard };
+}
+
+// -------------------- TODO --------------------
+// 1. Implement piece selection and valid moves highlighting
+// 2. Implement move execution, captures, multi-jumps
+// 3. Implement king promotion
+// 4. Implement victory detection
+// 5. Implement best-of-3 rounds
+// 6. Handle callback_query for cell selection and moves
 
 // -------------------- HTTP Handler --------------------
 serve(async (req) => {
-  try {
-    const url = new URL(req.url);
-    if (!url.pathname.endsWith(SECRET_PATH)) return new Response("Forbidden", { status: 403 });
-    const update = await req.json();
+  const url = new URL(req.url);
+  if (!url.pathname.endsWith(SECRET_PATH)) return new Response("Forbidden", { status: 403 });
+  const update = await req.json();
 
+  try {
     if (update.message) {
       const chatId = String(update.message.chat.id);
       const text = update.message.text ?? "";
@@ -236,42 +235,28 @@ serve(async (req) => {
 
       await initProfile(String(from.id), username, displayName);
 
-      // Commands
+      if (text === "/profile") await sendProfile(String(from.id));
+      if (text === "/leaderboard") await sendLeaderboard(String(from.id), 0);
       if (text === "/battle") {
-        const userKey = String(update.message.from.id);
-        if (battles[userKey]) {
-          await sendMessage(chatId, "⚔️ You are already in a game!");
-        } else if (queue.includes(userKey)) {
-          await sendMessage(chatId, "⌛ Searching for opponent...");
-        } else if (queue.length > 0 && queue[0] !== userKey) {
+        const userKey = String(from.id);
+        if (battles[userKey]) return await sendMessage(chatId, "⚔️ Already in a game!");
+        if (queue.includes(userKey)) return await sendMessage(chatId, "⌛ Searching opponent...");
+        if (queue.length > 0 && queue[0] !== userKey) {
           const opponent = queue.shift()!;
-          // startBattleCheckers(userKey, opponent) <-- implement similar to Tic-Tac-Toe startBattle
-        } else {
-          queue.push(userKey);
-          await sendMessage(chatId, "🔎 Searching opponent...");
-        }
+          // TODO: startBattle(userKey, opponent) with createBoard()
+        } else queue.push(userKey), await sendMessage(chatId, "🔎 Searching opponent...");
       }
-
-      if (text === "/profile") await sendProfile(String(update.message.from.id));
-      if (text === "/leaderboard") await sendLeaderboard(String(update.message.from.id), 0);
     }
 
     if (update.callback_query) {
       const fromId = String(update.callback_query.from.id);
       const data = update.callback_query.data;
       await answerCallbackQuery(update.callback_query.id, "Move received");
-      // TODO: handle callback: piece selection, move execution, turn switching, victory check
+      // TODO: handle selection, move execution, captures, king promotion
     }
   } catch (e) {
     console.error("Error handling update", e);
   }
+
   return new Response("ok");
 });
-
-
-
-
-
-
-
-
