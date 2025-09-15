@@ -528,6 +528,22 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     }
     queue.push(fromId);
     await sendMessage(fromId, "🔍 Searching for opponent...");
+    
+    // Set a timeout to check for opponent
+    const checkOpponent = async () => {
+      if (queue.includes(fromId) && queue.length < 2) {
+        await sendMessage(fromId, "⏱️ Still searching for opponent... Please wait or try again.");
+        // Re-schedule the check after another 30 seconds if still in queue
+        setTimeout(checkOpponent, 30000);
+      } else if (queue.includes(fromId) && queue.length >= 2) {
+        // Opponent found, proceed with battle start (handled by the queue logic below)
+        return;
+      }
+    };
+
+    // Initial check after 30 seconds
+    setTimeout(checkOpponent, 30000);
+
     if (queue.length >= 2) {
       const [p1, p2] = queue.splice(0, 2);
       await startBattle(p1, p2);
@@ -557,6 +573,21 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     trophyQueue.push(fromId);
     await sendMessage(fromId, "🔍 Searching for opponent for Trophy Battle...\n(1 TMT has been reserved for this match)");
     
+    // Set a timeout to check for opponent in trophy queue
+    const checkTrophyOpponent = async () => {
+      if (trophyQueue.includes(fromId) && trophyQueue.length < 2) {
+        await sendMessage(fromId, "⏱️ Still searching for opponent for Trophy Battle... Please wait or try again.");
+        // Re-schedule the check after another 30 seconds if still in queue
+        setTimeout(checkTrophyOpponent, 30000);
+      } else if (trophyQueue.includes(fromId) && trophyQueue.length >= 2) {
+        // Opponent found, proceed with battle start (handled by the queue logic below)
+        return;
+      }
+    };
+
+    // Initial check after 30 seconds
+    setTimeout(checkTrophyOpponent, 30000);
+
     if (trophyQueue.length >= 2) {
       const [p1, p2] = trophyQueue.splice(0, 2);
       // Deduct 1 TMT from the second player as well
@@ -565,6 +596,7 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     }
     return;
   }
+
 
   if (text.startsWith("/profile")) {
     await sendProfile(fromId);
@@ -659,6 +691,7 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
+
 
 
 
