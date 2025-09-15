@@ -1,4 +1,3 @@
-```typescript
 // main.ts
 // Telegram Tic-Tac-Toe Bot (Deno) - Enhanced Game Design
 // Features: matchmaking (/battle), private-game with inline buttons,
@@ -66,6 +65,7 @@ type Profile = {
   username?: string;
   displayName: string;
   trophies: number;
+  tmt: number; // Add TMT balance
   gamesPlayed: number;
   wins: number;
   losses: number;
@@ -86,6 +86,7 @@ async function initProfile(userId: string, username?: string, displayName?: stri
       username,
       displayName: displayName || userId,
       trophies: 1000, // Give new players a starting amount
+      tmt: 100, // Give new players starting TMT balance
       gamesPlayed: 0,
       wins: 0,
       losses: 0,
@@ -122,6 +123,7 @@ async function updateProfile(userId: string, delta: Partial<Profile>) {
     ...existing,
     ...delta,
     trophies: Math.max(0, (existing.trophies || 0) + (delta.trophies ?? 0)), // Prevent negative trophies
+    tmt: Math.max(0, (existing.tmt || 0) + (delta.tmt ?? 0)), // Prevent negative TMT
     gamesPlayed: (existing.gamesPlayed || 0) + (delta.gamesPlayed ?? 0),
     wins: (existing.wins || 0) + (delta.wins ?? 0),
     losses: (existing.losses || 0) + (delta.losses ?? 0),
@@ -149,6 +151,7 @@ async function sendProfile(chatId: string) {
   const msg =
     `🏅 *Profile of ${getDisplayName(p)}*\n\n` +
     `🏆 Trophies: *${p.trophies}*\n` +
+    `💰 TMT Balance: *${p.tmt}*\n` +
     `🏅 Rank: *${getRank(p.trophies)}*\n` +
     `🎲 Games Played: *${p.gamesPlayed}*\n` +
     `✅ Wins: *${p.wins}* | ❌ Losses: *${p.losses}* | 🤝 Draws: *${p.draws}*\n` +
@@ -186,7 +189,7 @@ async function sendLeaderboard(chatId: string, page = 0) {
     const rankNum = offset + i + 1;
     const name = getDisplayName(p);
     const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
-    msg += `*${rankNum}.* ${name} — 🏆 *${p.trophies}* | ✅ *${p.wins}* | ❌ *${p.losses}* | 🤝 *${p.draws}* | 📈 *${winRate}%*\n`;
+    msg += `*${rankNum}.* ${name} — 🏆 *${p.trophies}* | 💰 *${p.tmt}* | ✅ *${p.wins}* | ❌ *${p.losses}* | 🤝 *${p.draws}* | 📈 *${winRate}%*\n`;
   });
 
   const keyboard: any = { inline_keyboard: [] };
@@ -303,8 +306,8 @@ async function endBattleIdle(battle: any) {
   
   // If it was a trophy battle, refund the 1 TMT to both players
   if (battle.isTrophyBattle) {
-    await updateProfile(p1, { trophies: 1 });
-    await updateProfile(p2, { trophies: 1 });
+    await updateProfile(p1, { tmt: 1 });
+    await updateProfile(p2, { tmt: 1 });
     await sendMessage(p1, "💸 You've been refunded 1 TMT for the idle game.");
     await sendMessage(p2, "💸 You've been refunded 1 TMT for the idle game.");
   }
@@ -343,8 +346,8 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
     
     // If it was a trophy battle, refund the 1 TMT to both players
     if (battle.isTrophyBattle) {
-      await updateProfile(p1, { trophies: 1 });
-      await updateProfile(p2, { trophies: 1 });
+      await updateProfile(p1, { tmt: 1 });
+      await updateProfile(p2, { tmt: 1 });
       await sendMessage(p1, "💸 You've been refunded 1 TMT for the draw.");
       await sendMessage(p2, "💸 You've been refunded 1 TMT for the draw.");
     }
@@ -365,8 +368,8 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
     // Handle trophy battle rewards/penalties
     if (battle.isTrophyBattle) {
       // Winner gets 0.75 TMT, loser loses 1 TMT (net -0.25 TMT)
-      await updateProfile(winner, { trophies: -0.25 }); // Net gain is 0.75 (started with 1, ends with 1.75, but we deduct 0.25 from initial stake)
-      await updateProfile(loser, { trophies: -1 }); // Loser loses 1 TMT
+      await updateProfile(winner, { tmt: 0.75 }); // Winner gets 0.75 TMT
+      await updateProfile(loser, { tmt: -1 }); // Loser loses 1 TMT
       await sendMessage(winner, "🏆 You received 0.75 TMT for winning the Trophy Battle!");
       await sendMessage(loser, "💔 You lost 1 TMT for losing the Trophy Battle.");
     }
@@ -533,9 +536,9 @@ async function handleCommand(fromId: string, username: string | undefined, displ
   }
 
   if (text.startsWith("/trophy")) {
-    // Check if player has enough trophies (at least 1 TMT = 1 trophy)
+    // Check if player has enough TMT (at least 1 TMT)
     const profile = await getProfile(fromId);
-    if (!profile || profile.trophies < 1) {
+    if (!profile || profile.tmt < 1) {
       await sendMessage(fromId, "❌ You need at least 1 TMT to enter a Trophy Battle.");
       return;
     }
@@ -550,14 +553,14 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     }
     
     // Deduct 1 TMT from both players when they join the queue
-    await updateProfile(fromId, { trophies: -1 });
+    await updateProfile(fromId, { tmt: -1 });
     trophyQueue.push(fromId);
     await sendMessage(fromId, "🔍 Searching for opponent for Trophy Battle...\n(1 TMT has been reserved for this match)");
     
     if (trophyQueue.length >= 2) {
       const [p1, p2] = trophyQueue.splice(0, 2);
       // Deduct 1 TMT from the second player as well
-      await updateProfile(p2, { trophies: -1 });
+      await updateProfile(p2, { tmt: -1 });
       await startBattle(p1, p2, true); // true indicates it's a trophy battle
     }
     return;
@@ -579,18 +582,29 @@ async function handleCommand(fromId: string, username: string | undefined, displ
       return;
     }
     const parts = text.split(" ");
-    if (parts.length < 3) {
-      await sendMessage(fromId, "Usage: `/addtouser <userId> <trophies>`", { parse_mode: "Markdown" });
+    if (parts.length < 4) {
+      await sendMessage(fromId, "Usage: `/addtouser tmt <userId> <amount>` or `/addtouser trophies <userId> <amount>`", { parse_mode: "Markdown" });
       return;
     }
-    const userId = parts[1];
-    const trophies = parseInt(parts[2]);
-    if (isNaN(trophies)) {
-      await sendMessage(fromId, "Invalid trophies value. Please provide a number.");
+    
+    const type = parts[1]; // "tmt" or "trophies"
+    const userId = parts[2];
+    const amount = parseFloat(parts[3]);
+    
+    if (isNaN(amount)) {
+      await sendMessage(fromId, "Invalid amount value. Please provide a number.");
       return;
     }
-    await updateProfile(userId, { trophies });
-    await sendMessage(fromId, `✅ Added ${trophies} trophies to ID:${userId}`);
+    
+    if (type === "tmt") {
+      await updateProfile(userId, { tmt: amount });
+      await sendMessage(fromId, `✅ Added ${amount} TMT to ID:${userId}`);
+    } else if (type === "trophies") {
+      await updateProfile(userId, { trophies: amount });
+      await sendMessage(fromId, `✅ Added ${amount} trophies to ID:${userId}`);
+    } else {
+      await sendMessage(fromId, "Invalid type. Use 'tmt' or 'trophies'.");
+    }
     return;
   }
 
@@ -645,6 +659,7 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
+
 
 
 
