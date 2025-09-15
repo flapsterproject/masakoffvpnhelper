@@ -1,5 +1,5 @@
 // main.ts
-// Telegram Tic-Tac-Toe Bot (Deno)
+// Telegram Tic-Tac-Toe Bot (Deno) - Enhanced Game Design
 // Features: matchmaking (/battle), private-game with inline buttons,
 // profiles with stats (Deno KV), leaderboard with pagination, admin (/addtouser)
 // Match = best of 3 rounds
@@ -9,7 +9,7 @@ import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
-const SECRET_PATH = "/masakoffvpnhelper";
+const SECRET_PATH = "/masakoffvpnhelper"; // Make sure this matches your webhook URL
 
 // Deno KV
 const kv = await Deno.openKv();
@@ -46,12 +46,12 @@ async function editMessageText(chatId: string, messageId: number, text: string, 
   }
 }
 
-async function answerCallbackQuery(id: string, text = "") {
+async function answerCallbackQuery(id: string, text = "", showAlert = false) {
   try {
     await fetch(`${API}/answerCallbackQuery`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ callback_query_id: id, text }),
+      body: JSON.stringify({ callback_query_id: id, text, show_alert: showAlert }),
     });
   } catch (e) {
     console.warn("answerCallbackQuery failed", e?.message ?? e);
@@ -83,7 +83,7 @@ async function initProfile(userId: string, username?: string, displayName?: stri
       id: userId,
       username,
       displayName: displayName || userId,
-      trophies: 0,
+      trophies: 1000, // Give new players a starting amount
       gamesPlayed: 0,
       wins: 0,
       losses: 0,
@@ -119,7 +119,7 @@ async function updateProfile(userId: string, delta: Partial<Profile>) {
   const newProfile: Profile = {
     ...existing,
     ...delta,
-    trophies: (existing.trophies || 0) + (delta.trophies ?? 0),
+    trophies: Math.max(0, (existing.trophies || 0) + (delta.trophies ?? 0)), // Prevent negative trophies
     gamesPlayed: (existing.gamesPlayed || 0) + (delta.gamesPlayed ?? 0),
     wins: (existing.wins || 0) + (delta.wins ?? 0),
     losses: (existing.losses || 0) + (delta.losses ?? 0),
@@ -131,9 +131,11 @@ async function updateProfile(userId: string, delta: Partial<Profile>) {
 }
 
 function getRank(trophies: number) {
+  if (trophies < 500) return "🌱 Newbie";
   if (trophies < 1000) return "🥉 Bronze";
   if (trophies < 1500) return "🥈 Silver";
   if (trophies < 2000) return "🥇 Gold";
+  if (trophies < 2500) return "🏆 Platinum";
   return "💎 Diamond";
 }
 
@@ -143,14 +145,14 @@ async function sendProfile(chatId: string) {
   const date = new Date(p.lastActive).toLocaleString();
   const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
   const msg =
-    `🏅 Profile of ID:${p.id}\n` +
-    `Trophies: ${p.trophies} 🏆\n` +
-    `Rank: ${getRank(p.trophies)}\n` +
-    `Games: ${p.gamesPlayed}\n` +
-    `Wins: ${p.wins} | Losses: ${p.losses} | Draws: ${p.draws}\n` +
-    `Win Rate: ${winRate}%\n` +
-    `Last active: ${date}`;
-  await sendMessage(chatId, msg);
+    `🏅 *Profile of ${getDisplayName(p)}*\n\n` +
+    `🏆 Trophies: *${p.trophies}*\n` +
+    `🏅 Rank: *${getRank(p.trophies)}*\n` +
+    `🎲 Games Played: *${p.gamesPlayed}*\n` +
+    `✅ Wins: *${p.wins}* | ❌ Losses: *${p.losses}* | 🤝 Draws: *${p.draws}*\n` +
+    `📈 Win Rate: *${winRate}%*\n` +
+    `🕒 Last Active: _${date}_`;
+  await sendMessage(chatId, msg, { parse_mode: "Markdown" });
 }
 
 // -------------------- Leaderboard Helpers --------------------
@@ -159,7 +161,11 @@ async function getLeaderboard(top = 10, offset = 0) {
   for await (const entry of kv.list({ prefix: ["profiles"] })) {
     players.push(entry.value as Profile);
   }
-  players.sort((a, b) => b.trophies - a.trophies);
+  players.sort((a, b) => {
+    // Sort by trophies descending, then by wins descending
+    if (b.trophies !== a.trophies) return b.trophies - a.trophies;
+    return b.wins - a.wins;
+  });
   return players.slice(offset, offset + top);
 }
 
@@ -169,16 +175,16 @@ async function sendLeaderboard(chatId: string, page = 0) {
   const topPlayers = await getLeaderboard(perPage, offset);
 
   if (topPlayers.length === 0) {
-    await sendMessage(chatId, "No players yet!");
+    await sendMessage(chatId, "No players yet! Start playing to climb the leaderboard!");
     return;
   }
 
-  let msg = `🏆 Leaderboard — Page ${page + 1}\n\n`;
+  let msg = `🏆 *Leaderboard* — Page ${page + 1}\n\n`;
   topPlayers.forEach((p, i) => {
     const rankNum = offset + i + 1;
-    const name = `ID:${p.id}`;
+    const name = getDisplayName(p);
     const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
-    msg += `${rankNum}. ${name} — 🏆 ${p.trophies} | Wins: ${p.wins}, Losses: ${p.losses}, Draws: ${p.draws} | WinRate: ${winRate}%\n`;
+    msg += `*${rankNum}.* ${name} — 🏆 *${p.trophies}* | ✅ *${p.wins}* | ❌ *${p.losses}* | 🤝 *${p.draws}* | 📈 *${winRate}%*\n`;
   });
 
   const keyboard: any = { inline_keyboard: [] };
@@ -187,7 +193,7 @@ async function sendLeaderboard(chatId: string, page = 0) {
   if (topPlayers.length === perPage) row.push({ text: "Next ➡️", callback_data: `leaderboard:${page + 1}` });
   if (row.length) keyboard.inline_keyboard.push(row);
 
-  await sendMessage(chatId, msg, { reply_markup: keyboard });
+  await sendMessage(chatId, msg, { reply_markup: keyboard, parse_mode: "Markdown" });
 }
 
 // -------------------- Game Logic --------------------
@@ -197,35 +203,42 @@ function createEmptyBoard(): string[] {
 
 function boardToText(board: string[]) {
   const map: any = { "": "▫️", X: "❌", O: "⭕" };
-  return `\n${map[board[0]]}${map[board[1]]}${map[board[2]]}\n${map[board[3]]}${map[board[4]]}${map[board[5]]}\n${map[board[6]]}${map[board[7]]}${map[board[8]]}`;
+  let text = "\n";
+  for (let i = 0; i < 9; i += 3) {
+    text += `${map[board[i]]}${map[board[i + 1]]}${map[board[i + 2]]}\n`;
+  }
+  return text;
 }
 
 function checkWin(board: string[]) {
   const lines = [
-    [0, 1, 2], [3, 4, 5], [6, 7, 8],
-    [0, 3, 6], [1, 4, 7], [2, 5, 8],
-    [0, 4, 8], [2, 4, 6],
+    [0, 1, 2], [3, 4, 5], [6, 7, 8], // rows
+    [0, 3, 6], [1, 4, 7], [2, 5, 8], // columns
+    [0, 4, 8], [2, 4, 6]             // diagonals
   ];
   for (const [a, b, c] of lines) {
-    if (board[a] && board[a] === board[b] && board[a] === board[c]) return board[a];
+    if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+      return { winner: board[a], line: [a, b, c] };
+    }
   }
-  if (board.every((c) => c !== "")) return "draw";
+  if (board.every((c) => c !== "")) return { winner: "draw" };
   return null;
 }
 
-function makeInlineKeyboard(board: string[]) {
+function makeInlineKeyboard(board: string[], disabled = false) {
   const keyboard: any[] = [];
   for (let r = 0; r < 3; r++) {
     const row: any[] = [];
     for (let c = 0; c < 3; c++) {
       const i = r * 3 + c;
       const cell = board[i];
-      let text = cell === "X" ? "❌" : cell === "O" ? "⭕" : "▫️";
-      row.push({ text, callback_data: `move:${i}` });
+      let text = cell === "X" ? "❌" : cell === "O" ? "⭕" : `${i + 1}`; // Show number for empty cells
+      const callback_data = disabled ? "noop" : `move:${i}`;
+      row.push({ text, callback_data });
     }
     keyboard.push(row);
   }
-  keyboard.push([{ text: "Surrender", callback_data: "surrender" }]);
+  keyboard.push([{ text: "🏳️ Surrender", callback_data: "surrender" }]);
   return { inline_keyboard: keyboard };
 }
 
@@ -247,31 +260,39 @@ async function startBattle(p1: string, p2: string) {
   await initProfile(p1);
   await initProfile(p2);
 
-  await sendMessage(p1, `Opponent found! You are ❌ (X). Best of 3 rounds vs ID:${p2}`);
-  await sendMessage(p2, `Opponent found! You are ⭕ (O). Best of 3 rounds vs ID:${p1}`);
+  await sendMessage(p1, `⚔️ *Opponent Found!*\n\nYou are ❌ (X).\n\n*Match Format:* Best of 3 rounds vs ID:${p2}`, { parse_mode: "Markdown" });
+  await sendMessage(p2, `⚔️ *Opponent Found!*\n\nYou are ⭕ (O).\n\n*Match Format:* Best of 3 rounds vs ID:${p1}`, { parse_mode: "Markdown" });
   await sendRoundStart(battle);
 }
 
 function headerForPlayer(battle: any, player: string) {
   const opponent = battle.players.find((p: string) => p !== player)!;
-  return `Tic-Tac-Toe — You vs ID:${opponent}`;
+  const yourMark = battle.marks[player];
+  const opponentMark = battle.marks[opponent];
+  return `🎯 *Tic-Tac-Toe* — You (${yourMark}) vs ID:${opponent} (${opponentMark})`;
 }
 
 async function sendRoundStart(battle: any) {
   for (const player of battle.players) {
     const header = headerForPlayer(battle, player);
-    const text = `${header}\nRound ${battle.round}/3\nScore: ${battle.roundWins[battle.players[0]]}-${battle.roundWins[battle.players[1]]}\nTurn: ${battle.turn === player ? "Your move" : "Opponent"}${boardToText(battle.board)}`;
-    const msgId = await sendMessage(player, text, { reply_markup: makeInlineKeyboard(battle.board) });
+    const yourTurn = battle.turn === player;
+    const text =
+      `${header}\n\n` +
+      `*Round ${battle.round}/3*\n` +
+      `📊 Score: ${battle.roundWins[battle.players[0]]} - ${battle.roundWins[battle.players[1]]}\n` +
+      `🎲 Turn: ${yourTurn ? "*Your move* ❌" : "Opponent's move ⭕"}\n` +
+      boardToText(battle.board);
+    const msgId = await sendMessage(player, text, { reply_markup: makeInlineKeyboard(battle.board), parse_mode: "Markdown" });
     if (msgId) battle.messageIds[player] = msgId;
   }
   if (battle.idleTimerId) clearTimeout(battle.idleTimerId);
-  battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 5 * 60 * 1000);
+  battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 5 * 60 * 1000); // 5 minutes
 }
 
 async function endBattleIdle(battle: any) {
   const [p1, p2] = battle.players;
-  await sendMessage(p1, "⚠️ Game ended due to inactivity (5 minutes).");
-  await sendMessage(p2, "⚠️ Game ended due to inactivity (5 minutes).");
+  await sendMessage(p1, "⚠️ *Game ended due to inactivity* (5 minutes).", { parse_mode: "Markdown" });
+  await sendMessage(p2, "⚠️ *Game ended due to inactivity* (5 minutes).", { parse_mode: "Markdown" });
   delete battles[p1];
   delete battles[p2];
 }
@@ -284,13 +305,17 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
     const msgId = battle.messageIds[player];
     const header = headerForPlayer(battle, player);
     let text: string;
-    if (result.draw) text = `${header}\nMatch ended in a draw!${boardToText(battle.board)}`;
-    else if (result.winner === player) text = `${header}\nYou won the match! 🎉${boardToText(battle.board)}`;
-    else text = `${header}\nYou lost the match.${boardToText(battle.board)}`;
-    if (msgId) {
-      await editMessageText(player, msgId, text, {});
+    if (result.draw) {
+      text = `${header}\n\n*Match Result:* 🤝 *Draw!*\n${boardToText(battle.board)}`;
+    } else if (result.winner === player) {
+      text = `${header}\n\n*Match Result:* 🎉 *You Won the Match!*\n${boardToText(battle.board)}`;
     } else {
-      await sendMessage(player, text);
+      text = `${header}\n\n*Match Result:* 😢 *You Lost the Match.*\n${boardToText(battle.board)}`;
+    }
+    if (msgId) {
+      await editMessageText(player, msgId, text, { reply_markup: makeInlineKeyboard(battle.board, true), parse_mode: "Markdown" }); // Disable buttons
+    } else {
+      await sendMessage(player, text, { parse_mode: "Markdown" });
     }
   }
 
@@ -304,10 +329,13 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
     const loser = result.loser!;
     await initProfile(winner);
     await initProfile(loser);
-    await updateProfile(winner, { gamesPlayed: 1, wins: 1, trophies: 0.85 });
-    await updateProfile(loser, { gamesPlayed: 1, losses: 1, trophies: -1 });
-    await sendMessage(winner, `🎉 You won the match! +10 trophies (vs ID:${loser})`);
-    await sendMessage(loser, `😢 You lost the match. -5 trophies (vs ID:${winner})`);
+    // Trophy calculation with a base value
+    const trophyChangeWinner = Math.max(1, Math.floor(10 * (1 + (await getProfile(loser))!.trophies / (await getProfile(winner))!.trophies))); // Winner gains more if opponent has more trophies
+    const trophyChangeLoser = -Math.max(1, Math.floor(5 * (1 + (await getProfile(winner))!.trophies / (await getProfile(loser))!.trophies))); // Loser loses more if opponent has more trophies
+    await updateProfile(winner, { gamesPlayed: 1, wins: 1, trophies: trophyChangeWinner });
+    await updateProfile(loser, { gamesPlayed: 1, losses: 1, trophies: trophyChangeLoser });
+    await sendMessage(winner, `🎉 You won the match!\n🏆 *+${trophyChangeWinner} trophies* (vs ID:${loser})`, { parse_mode: "Markdown" });
+    await sendMessage(loser, `😢 You lost the match.\n🏆 *${trophyChangeLoser} trophies* (vs ID:${winner})`, { parse_mode: "Markdown" });
   }
 
   delete battles[p1];
@@ -324,21 +352,30 @@ async function handleCallback(fromId: string, data: string, callbackId: string) 
       return;
     }
 
+    if (data === "noop") {
+        await answerCallbackQuery(callbackId);
+        return;
+    }
+
     const battle = battles[fromId];
     if (!battle) {
       if (data === "surrender") {
-        await answerCallbackQuery(callbackId, "You are not in a game.");
+        await answerCallbackQuery(callbackId, "You are not in a game.", true);
         return;
       }
+      // If it's a move callback but no battle, just acknowledge silently or ignore
       await answerCallbackQuery(callbackId);
       return;
     }
 
+    // Reset idle timer on any valid interaction
     if (battle.idleTimerId) clearTimeout(battle.idleTimerId);
     battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 5 * 60 * 1000);
 
     if (data === "surrender") {
       const opponent = battle.players.find((p: string) => p !== fromId)!;
+      await sendMessage(fromId, "🏳️ You surrendered the match.");
+      await sendMessage(opponent, "🏳️ Your opponent surrendered. You win the match!");
       await finishMatch(battle, { winner: opponent, loser: fromId });
       await answerCallbackQuery(callbackId, "You surrendered.");
       return;
@@ -350,37 +387,53 @@ async function handleCallback(fromId: string, data: string, callbackId: string) 
     }
 
     const idx = parseInt(data.split(":")[1]);
+    if (isNaN(idx) || idx < 0 || idx > 8) { // Validate index
+         await answerCallbackQuery(callbackId, "Invalid move.", true);
+         return;
+    }
     if (battle.turn !== fromId) {
-      await answerCallbackQuery(callbackId, "Not your turn.");
+      await answerCallbackQuery(callbackId, "Not your turn.", true);
       return;
     }
     if (battle.board[idx] !== "") {
-      await answerCallbackQuery(callbackId, "Cell already taken.");
+      await answerCallbackQuery(callbackId, "Cell already taken.", true);
       return;
     }
 
     const mark = battle.marks[fromId];
     battle.board[idx] = mark;
 
-    const res = checkWin(battle.board);
-    if (res === "X" || res === "O" || res === "draw") {
+    const winResult = checkWin(battle.board);
+    if (winResult) {
+      const { winner, line } = winResult; // Destructure to get winner and winning line
       let roundWinner: string | undefined;
-      if (res !== "draw") {
-        roundWinner = battle.players.find((p: string) => battle.marks[p] === res)!;
+      if (winner !== "draw") {
+        roundWinner = battle.players.find((p: string) => battle.marks[p] === winner)!;
         battle.roundWins[roundWinner] = (battle.roundWins[roundWinner] || 0) + 1;
+      }
+
+      // Highlight winning line or indicate draw
+      let boardText = boardToText(battle.board);
+      if (line) {
+          // Simple highlight: just add a note. For advanced highlighting, you'd need to change the emoji or use HTML/MarkdownV2 with nested formatting.
+          boardText += `\n🎉 *Line:* ${line.map(i => i+1).join('-')}`; // Show 1-based indices of the winning line
+      } else if (winner === "draw") {
+          boardText += `\n🤝 *It's a Draw!*`;
       }
 
       for (const player of battle.players) {
         const msgId = battle.messageIds[player];
         const header = headerForPlayer(battle, player);
-        let text = `${header}\nRound ${battle.round} finished!\n`;
-        if (res === "draw") text += `🤝 It's a draw!\n`;
-        else text += `${roundWinner === player ? "🎉 You won the round!" : "You lost this round."}\n`;
-        text += `Score: ${battle.roundWins[battle.players[0]]}-${battle.roundWins[battle.players[1]]}${boardToText(battle.board)}`;
-        if (msgId) await editMessageText(player, msgId, text, {});
-        else await sendMessage(player, text);
+        let text = `${header}\n\n*Round ${battle.round} Result!*\n`;
+        if (winner === "draw") text += `🤝 It's a draw!\n`;
+        else text += `${roundWinner === player ? "🎉 You won the round!" : "😢 You lost this round."}\n`;
+        text += `📊 Score: ${battle.roundWins[battle.players[0]]} - ${battle.roundWins[battle.players[1]]}\n${boardText}`;
+        // Disable buttons on round end
+        if (msgId) await editMessageText(player, msgId, text, { reply_markup: makeInlineKeyboard(battle.board, true), parse_mode: "Markdown" });
+        else await sendMessage(player, text, { parse_mode: "Markdown" });
       }
 
+      // Check if match is over (best of 3)
       if (battle.roundWins[battle.players[0]] === 2 || battle.roundWins[battle.players[1]] === 2 || battle.round === 3) {
         if (battle.roundWins[battle.players[0]] > battle.roundWins[battle.players[1]]) {
           await finishMatch(battle, { winner: battle.players[0], loser: battle.players[1] });
@@ -393,25 +446,35 @@ async function handleCallback(fromId: string, data: string, callbackId: string) 
         return;
       }
 
+      // Start next round
       battle.round++;
       battle.board = createEmptyBoard();
-      battle.turn = battle.players[(battle.round - 1) % 2];
+      battle.turn = battle.players[(battle.round - 1) % 2]; // Alternate who starts
       await sendRoundStart(battle);
-      await answerCallbackQuery(callbackId);
+      await answerCallbackQuery(callbackId, "Move played!");
       return;
     }
 
+    // Continue game if no win/draw yet
     battle.turn = battle.players.find((p: string) => p !== fromId)!;
     for (const player of battle.players) {
       const header = headerForPlayer(battle, player);
-      const text = `${header}\nRound ${battle.round}/3\nScore: ${battle.roundWins[battle.players[0]]}-${battle.roundWins[battle.players[1]]}\nTurn: ${battle.turn === player ? "Your move" : "Opponent"}${boardToText(battle.board)}`;
+      const yourTurn = battle.turn === player;
+      const text =
+        `${header}\n\n` +
+        `*Round ${battle.round}/3*\n` +
+        `📊 Score: ${battle.roundWins[battle.players[0]]} - ${battle.roundWins[battle.players[1]]}\n` +
+        `🎲 Turn: ${yourTurn ? "*Your move* ❌" : "Opponent's move ⭕"}\n` +
+        boardToText(battle.board);
       const msgId = battle.messageIds[player];
-      if (msgId) await editMessageText(player, msgId, text, { reply_markup: makeInlineKeyboard(battle.board) });
-      else await sendMessage(player, text, { reply_markup: makeInlineKeyboard(battle.board) });
+      if (msgId) await editMessageText(player, msgId, text, { reply_markup: makeInlineKeyboard(battle.board), parse_mode: "Markdown" });
+      else await sendMessage(player, text, { reply_markup: makeInlineKeyboard(battle.board), parse_mode: "Markdown" });
     }
-    await answerCallbackQuery(callbackId);
+    await answerCallbackQuery(callbackId, "Move played!");
   } catch (e) {
     console.error("handleCallback error", e);
+    // Optionally notify the user of an internal error
+    // await answerCallbackQuery(callbackId, "An error occurred. Please try again.", true);
   }
 }
 
@@ -419,15 +482,15 @@ async function handleCallback(fromId: string, data: string, callbackId: string) 
 async function handleCommand(fromId: string, username: string | undefined, displayName: string, text: string) {
   if (text.startsWith("/battle")) {
     if (queue.includes(fromId)) {
-      await sendMessage(fromId, "You are already in the queue.");
+      await sendMessage(fromId, "You are already in the queue. Please wait for an opponent.");
       return;
     }
     if (battles[fromId]) {
-      await sendMessage(fromId, "You are already in a battle.");
+      await sendMessage(fromId, "You are already in a battle. Finish your current game first.");
       return;
     }
     queue.push(fromId);
-    await sendMessage(fromId, "Searching for opponent...");
+    await sendMessage(fromId, "🔍 Searching for opponent...");
     if (queue.length >= 2) {
       const [p1, p2] = queue.splice(0, 2);
       await startBattle(p1, p2);
@@ -447,26 +510,37 @@ async function handleCommand(fromId: string, username: string | undefined, displ
 
   if (text.startsWith("/addtouser")) {
     if (username !== ADMIN_USERNAME.replace("@", "")) {
-      await sendMessage(fromId, "Unauthorized.");
+      await sendMessage(fromId, "❌ Unauthorized.");
       return;
     }
     const parts = text.split(" ");
     if (parts.length < 3) {
-      await sendMessage(fromId, "Usage: /addtouser <userId> <trophies>");
+      await sendMessage(fromId, "Usage: `/addtouser <userId> <trophies>`", { parse_mode: "Markdown" });
       return;
     }
     const userId = parts[1];
     const trophies = parseInt(parts[2]);
     if (isNaN(trophies)) {
-      await sendMessage(fromId, "Invalid trophies value.");
+      await sendMessage(fromId, "Invalid trophies value. Please provide a number.");
       return;
     }
     await updateProfile(userId, { trophies });
-    await sendMessage(fromId, `Added ${trophies} trophies to ID:${userId}`);
+    await sendMessage(fromId, `✅ Added ${trophies} trophies to ID:${userId}`);
     return;
   }
 
-  await sendMessage(fromId, "Unknown command.");
+  if (text.startsWith("/start") || text.startsWith("/help")) {
+      const helpText = `🎮 *Welcome to Tic-Tac-Toe Bot!*\n\n` +
+          `Use the following commands:\n` +
+          `🔹 /battle - Find an opponent for a match.\n` +
+          `🔹 /profile - View your stats and rank.\n` +
+          `🔹 /leaderboard - See the top players.\n\n` +
+          `Good luck and have fun!`;
+       await sendMessage(fromId, helpText, { parse_mode: "Markdown" });
+       return;
+  }
+
+  await sendMessage(fromId, "❓ Unknown command. Type /help for a list of commands.");
 }
 
 // -------------------- Server --------------------
@@ -489,6 +563,9 @@ serve(async (req: Request) => {
 
       if (text.startsWith("/")) {
         await handleCommand(fromId, username, displayName, text);
+      } else {
+          // Handle non-command messages, e.g., send help
+          await sendMessage(fromId, "Type /help to see available commands.");
       }
     } else if (update.callback_query) {
       const cb = update.callback_query;
