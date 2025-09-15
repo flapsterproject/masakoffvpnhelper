@@ -1,8 +1,9 @@
 // main.ts
-// Telegram Tic-Tac-Toe Bot (Deno)
+// Telegram Tic-Tac-Toe Bot (Deno) with TMT currency
 // Features: matchmaking (/battle), private-game with inline buttons,
 // profiles with stats (Deno KV), leaderboard with pagination, admin (/addtouser)
 // Match = best of 3 rounds
+// TMT system: need ≥1 TMT to battle, Win +0.75 TMT, Lose -1 TMT
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
@@ -13,7 +14,7 @@ const SECRET_PATH = "/masakoffvpnhelper";
 
 // Deno KV
 const kv = await Deno.openKv();
-const ADMIN_USERNAME = "@amangeldimasakov"; // keep as username check, change to ADMIN_ID if you want id-based admin
+const ADMIN_USERNAME = "@amangeldimasakov"; // check by username
 
 let queue: string[] = [];
 const battles: Record<string, any> = {};
@@ -63,17 +64,13 @@ type Profile = {
   id: string;
   username?: string;
   displayName: string;
-  trophies: number;
+  tmt: number;
   gamesPlayed: number;
   wins: number;
   losses: number;
   draws: number;
   lastActive: number;
 };
-
-function getDisplayName(p: Profile) {
-  return `ID:${p.id}`;
-}
 
 async function initProfile(userId: string, username?: string, displayName?: string) {
   const key = ["profiles", userId];
@@ -83,7 +80,7 @@ async function initProfile(userId: string, username?: string, displayName?: stri
       id: userId,
       username,
       displayName: displayName || userId,
-      trophies: 0,
+      tmt: 1, // give default 1 TMT for new user
       gamesPlayed: 0,
       wins: 0,
       losses: 0,
@@ -94,17 +91,10 @@ async function initProfile(userId: string, username?: string, displayName?: stri
     return profile;
   } else {
     const existing = value.value as Profile;
-    let changed = false;
-    if (username && username !== existing.username) {
-      existing.username = username;
-      changed = true;
-    }
-    if (displayName && displayName !== existing.displayName) {
-      existing.displayName = displayName;
-      changed = true;
-    }
     existing.lastActive = Date.now();
-    if (changed) await kv.set(key, existing);
+    if (username && username !== existing.username) existing.username = username;
+    if (displayName && displayName !== existing.displayName) existing.displayName = displayName;
+    await kv.set(key, existing);
     return existing;
   }
 }
@@ -119,22 +109,16 @@ async function updateProfile(userId: string, delta: Partial<Profile>) {
   const newProfile: Profile = {
     ...existing,
     ...delta,
-    trophies: (existing.trophies || 0) + (delta.trophies ?? 0),
+    tmt: (existing.tmt || 0) + (delta.tmt ?? 0),
     gamesPlayed: (existing.gamesPlayed || 0) + (delta.gamesPlayed ?? 0),
     wins: (existing.wins || 0) + (delta.wins ?? 0),
     losses: (existing.losses || 0) + (delta.losses ?? 0),
     draws: (existing.draws || 0) + (delta.draws ?? 0),
     lastActive: Date.now(),
   };
+  if (newProfile.tmt < 0) newProfile.tmt = 0;
   await kv.set(["profiles", userId], newProfile);
   return newProfile;
-}
-
-function getRank(trophies: number) {
-  if (trophies < 1000) return "🥉 Bronze";
-  if (trophies < 1500) return "🥈 Silver";
-  if (trophies < 2000) return "🥇 Gold";
-  return "💎 Diamond";
 }
 
 async function sendProfile(chatId: string) {
@@ -143,9 +127,8 @@ async function sendProfile(chatId: string) {
   const date = new Date(p.lastActive).toLocaleString();
   const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
   const msg =
-    `🏅 Profile of ID:${p.id}\n` +
-    `Trophies: ${p.trophies} 🏆\n` +
-    `Rank: ${getRank(p.trophies)}\n` +
+    `💳 Profile of ID:${p.id}\n` +
+    `TMT Balance: ${p.tmt.toFixed(2)} 💰\n` +
     `Games: ${p.gamesPlayed}\n` +
     `Wins: ${p.wins} | Losses: ${p.losses} | Draws: ${p.draws}\n` +
     `Win Rate: ${winRate}%\n` +
@@ -159,7 +142,7 @@ async function getLeaderboard(top = 10, offset = 0) {
   for await (const entry of kv.list({ prefix: ["profiles"] })) {
     players.push(entry.value as Profile);
   }
-  players.sort((a, b) => b.trophies - a.trophies);
+  players.sort((a, b) => b.tmt - a.tmt);
   return players.slice(offset, offset + top);
 }
 
@@ -173,12 +156,12 @@ async function sendLeaderboard(chatId: string, page = 0) {
     return;
   }
 
-  let msg = `🏆 Leaderboard — Page ${page + 1}\n\n`;
+  let msg = `🏆 TMT Leaderboard — Page ${page + 1}\n\n`;
   topPlayers.forEach((p, i) => {
     const rankNum = offset + i + 1;
     const name = `ID:${p.id}`;
     const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
-    msg += `${rankNum}. ${name} — 🏆 ${p.trophies} | Wins: ${p.wins}, Losses: ${p.losses}, Draws: ${p.draws} | WinRate: ${winRate}%\n`;
+    msg += `${rankNum}. ${name} — 💰 ${p.tmt.toFixed(2)} TMT | Wins: ${p.wins}, Losses: ${p.losses}, Draws: ${p.draws} | WinRate: ${winRate}%\n`;
   });
 
   const keyboard: any = { inline_keyboard: [] };
@@ -304,10 +287,10 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
     const loser = result.loser!;
     await initProfile(winner);
     await initProfile(loser);
-    await updateProfile(winner, { gamesPlayed: 1, wins: 1, trophies: 0.85 });
-    await updateProfile(loser, { gamesPlayed: 1, losses: 1, trophies: -1 });
-    await sendMessage(winner, `🎉 You won the match! +10 trophies (vs ID:${loser})`);
-    await sendMessage(loser, `😢 You lost the match. -5 trophies (vs ID:${winner})`);
+    await updateProfile(winner, { gamesPlayed: 1, wins: 1, tmt: +0.75 });
+    await updateProfile(loser, { gamesPlayed: 1, losses: 1, tmt: -1 });
+    await sendMessage(winner, `🎉 You won the match! +0.75 TMT (vs ID:${loser})`);
+    await sendMessage(loser, `😢 You lost the match. -1 TMT (vs ID:${winner})`);
   }
 
   delete battles[p1];
@@ -402,107 +385,103 @@ async function handleCallback(fromId: string, data: string, callbackId: string) 
     }
 
     battle.turn = battle.players.find((p: string) => p !== fromId)!;
+
     for (const player of battle.players) {
+      const msgId = battle.messageIds[player];
       const header = headerForPlayer(battle, player);
       const text = `${header}\nRound ${battle.round}/3\nScore: ${battle.roundWins[battle.players[0]]}-${battle.roundWins[battle.players[1]]}\nTurn: ${battle.turn === player ? "Your move" : "Opponent"}${boardToText(battle.board)}`;
-      const msgId = battle.messageIds[player];
       if (msgId) await editMessageText(player, msgId, text, { reply_markup: makeInlineKeyboard(battle.board) });
-      else await sendMessage(player, text, { reply_markup: makeInlineKeyboard(battle.board) });
     }
+
     await answerCallbackQuery(callbackId);
   } catch (e) {
     console.error("handleCallback error", e);
   }
 }
 
-// -------------------- Command Handlers --------------------
-async function handleCommand(fromId: string, username: string | undefined, displayName: string, text: string) {
-  if (text.startsWith("/battle")) {
-    if (queue.includes(fromId)) {
-      await sendMessage(fromId, "You are already in the queue.");
-      return;
-    }
-    if (battles[fromId]) {
-      await sendMessage(fromId, "You are already in a battle.");
-      return;
-    }
-    queue.push(fromId);
-    await sendMessage(fromId, "Searching for opponent...");
-    if (queue.length >= 2) {
-      const [p1, p2] = queue.splice(0, 2);
-      await startBattle(p1, p2);
-    }
-    return;
-  }
-
-  if (text.startsWith("/profile")) {
-    await sendProfile(fromId);
-    return;
-  }
-
-  if (text.startsWith("/leaderboard")) {
-    await sendLeaderboard(fromId, 0);
-    return;
-  }
-
-  if (text.startsWith("/addtouser")) {
-    if (username !== ADMIN_USERNAME.replace("@", "")) {
-      await sendMessage(fromId, "Unauthorized.");
+// -------------------- Commands --------------------
+async function handleCommand(userId: string, username: string | undefined, firstName: string | undefined, text: string) {
+  if (text === "/start") {
+    await initProfile(userId, username, firstName);
+    await sendMessage(userId, "Welcome to Tic-Tac-Toe! Use /battle to find opponent, /profile to see your stats, /leaderboard to see rankings.");
+  } else if (text === "/profile") {
+    await sendProfile(userId);
+  } else if (text.startsWith("/addtouser")) {
+    if ("@" + username !== ADMIN_USERNAME) {
+      await sendMessage(userId, "You are not admin.");
       return;
     }
     const parts = text.split(" ");
     if (parts.length < 3) {
-      await sendMessage(fromId, "Usage: /addtouser <userId> <trophies>");
+      await sendMessage(userId, "Usage: /addtouser <userId> <amount>");
       return;
     }
-    const userId = parts[1];
-    const trophies = parseInt(parts[2]);
-    if (isNaN(trophies)) {
-      await sendMessage(fromId, "Invalid trophies value.");
+    const targetId = parts[1];
+    const amt = parseFloat(parts[2]);
+    if (isNaN(amt)) {
+      await sendMessage(userId, "Invalid amount.");
       return;
     }
-    await updateProfile(userId, { trophies });
-    await sendMessage(fromId, `Added ${trophies} trophies to ID:${userId}`);
-    return;
+    await updateProfile(targetId, { tmt: amt });
+    await sendMessage(userId, `Added ${amt} TMT to user ${targetId}`);
+  } else if (text === "/leaderboard") {
+    await sendLeaderboard(userId, 0);
+  } else if (text === "/battle") {
+    const profile = await getProfile(userId);
+    if (!profile || profile.tmt < 1) {
+      await sendMessage(userId, "❌ You need at least 1 TMT to start a match.");
+      return;
+    }
+    if (queue.includes(userId)) {
+      await sendMessage(userId, "You are already in queue.");
+      return;
+    }
+    if (queue.length > 0) {
+      const opponent = queue.shift()!;
+      if (opponent === userId) {
+        queue.push(userId);
+        return;
+      }
+      await startBattle(userId, opponent);
+    } else {
+      queue.push(userId);
+      await sendMessage(userId, "⏳ Waiting for opponent...");
+    }
   }
-
-  await sendMessage(fromId, "Unknown command.");
 }
 
-// -------------------- Server --------------------
-serve(async (req: Request) => {
-  try {
-    const url = new URL(req.url);
-    if (url.pathname !== SECRET_PATH) return new Response("Not found", { status: 404 });
-    if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
+// -------------------- HTTP Handler --------------------
+serve(async (req) => {
+  const { pathname } = new URL(req.url);
 
+  if (pathname === SECRET_PATH && req.method === "POST") {
     const update = await req.json();
-    if (update.message) {
-      const msg = update.message;
-      const from = msg.from;
-      const text = msg.text || "";
-      const fromId = String(from.id);
-      const username = from.username;
-      const displayName = from.first_name || fromId;
-
-      await initProfile(fromId, username, displayName);
-
-      if (text.startsWith("/")) {
-        await handleCommand(fromId, username, displayName, text);
+    try {
+      if (update.message) {
+        const m = update.message;
+        const fromId = m.from.id.toString();
+        const username = m.from.username;
+        const firstName = m.from.first_name;
+        const text = m.text;
+        if (text) {
+          await handleCommand(fromId, username, firstName, text);
+        }
+      } else if (update.callback_query) {
+        const cb = update.callback_query;
+        const fromId = cb.from.id.toString();
+        const data = cb.data;
+        if (data) {
+          await handleCallback(fromId, data, cb.id);
+        }
       }
-    } else if (update.callback_query) {
-      const cb = update.callback_query;
-      const fromId = String(cb.from.id);
-      await handleCallback(fromId, cb.data, cb.id);
+    } catch (e) {
+      console.error("update handler error", e);
     }
-
     return new Response("OK");
-  } catch (e) {
-    console.error("server error", e);
-    return new Response("Error", { status: 500 });
   }
-});
 
+  return new Response("Not found", { status: 404 });
+});
 
 
 
