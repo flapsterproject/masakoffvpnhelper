@@ -18,7 +18,6 @@ const ADMIN_USERNAME = "@amangeldimasakov"; // keep as username check, change to
 let queue: string[] = [];
 let trophyQueue: string[] = []; // Queue for trophy battles
 const battles: Record<string, any> = {};
-const searchTimers: Record<string, any> = {}; // Track search timers
 
 // -------------------- Telegram Helpers --------------------
 async function sendMessage(chatId: string, text: string, options: any = {}): Promise<number | null> {
@@ -381,7 +380,7 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
 }
 
 // -------------------- Callback --------------------
-async function handleCallback(fromId: string,  string, callbackId: string) {
+async function handleCallback(fromId: string, data: string, callbackId: string) {
   try {
     if (data.startsWith("leaderboard:")) {
       const page = parseInt(data.split(":")[1]) || 0;
@@ -519,13 +518,6 @@ async function handleCallback(fromId: string,  string, callbackId: string) {
 // -------------------- Command Handlers --------------------
 async function handleCommand(fromId: string, username: string | undefined, displayName: string, text: string) {
   if (text.startsWith("/battle")) {
-    // Check if player has enough TMT (at least 1 TMT)
-    const profile = await getProfile(fromId);
-    if (!profile || profile.tmt < 1) {
-      await sendMessage(fromId, "❌ You need at least 1 TMT to enter a Battle.");
-      return;
-    }
-
     if (queue.includes(fromId)) {
       await sendMessage(fromId, "You are already in the queue. Please wait for an opponent.");
       return;
@@ -534,34 +526,10 @@ async function handleCommand(fromId: string, username: string | undefined, displ
       await sendMessage(fromId, "You are already in a battle. Finish your current game first.");
       return;
     }
-    
-    // Deduct 1 TMT from player when they join the queue
-    await updateProfile(fromId, { tmt: -1 });
     queue.push(fromId);
-    await sendMessage(fromId, "🔍 Searching for opponent...\n(1 TMT has been reserved for this match)");
-    
-    // Set a timer to cancel search after 30 seconds
-    if (searchTimers[fromId]) clearTimeout(searchTimers[fromId]);
-    searchTimers[fromId] = setTimeout(async () => {
-      const index = queue.indexOf(fromId);
-      if (index !== -1) {
-        queue.splice(index, 1);
-        // Refund the 1 TMT
-        await updateProfile(fromId, { tmt: 1 });
-        await sendMessage(fromId, "⏰ Search timed out. Please try again.\n(1 TMT has been refunded)");
-        delete searchTimers[fromId];
-      }
-    }, 30 * 1000); // 30 seconds
-    
+    await sendMessage(fromId, "🔍 Searching for opponent...");
     if (queue.length >= 2) {
       const [p1, p2] = queue.splice(0, 2);
-      // Clear search timers
-      if (searchTimers[p1]) clearTimeout(searchTimers[p1]);
-      if (searchTimers[p2]) clearTimeout(searchTimers[p2]);
-      delete searchTimers[p1];
-      delete searchTimers[p2];
-      // Deduct 1 TMT from the second player as well
-      await updateProfile(p2, { tmt: -1 });
       await startBattle(p1, p2);
     }
     return;
@@ -589,26 +557,8 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     trophyQueue.push(fromId);
     await sendMessage(fromId, "🔍 Searching for opponent for Trophy Battle...\n(1 TMT has been reserved for this match)");
     
-    // Set a timer to cancel search after 30 seconds
-    if (searchTimers[fromId]) clearTimeout(searchTimers[fromId]);
-    searchTimers[fromId] = setTimeout(async () => {
-      const index = trophyQueue.indexOf(fromId);
-      if (index !== -1) {
-        trophyQueue.splice(index, 1);
-        // Refund the 1 TMT
-        await updateProfile(fromId, { tmt: 1 });
-        await sendMessage(fromId, "⏰ Search timed out. Please try again.\n(1 TMT has been refunded)");
-        delete searchTimers[fromId];
-      }
-    }, 30 * 1000); // 30 seconds
-    
     if (trophyQueue.length >= 2) {
       const [p1, p2] = trophyQueue.splice(0, 2);
-      // Clear search timers
-      if (searchTimers[p1]) clearTimeout(searchTimers[p1]);
-      if (searchTimers[p2]) clearTimeout(searchTimers[p2]);
-      delete searchTimers[p1];
-      delete searchTimers[p2];
       // Deduct 1 TMT from the second player as well
       await updateProfile(p2, { tmt: -1 });
       await startBattle(p1, p2, true); // true indicates it's a trophy battle
@@ -661,7 +611,7 @@ async function handleCommand(fromId: string, username: string | undefined, displ
   if (text.startsWith("/start") || text.startsWith("/help")) {
       const helpText = `🎮 *Welcome to Tic-Tac-Toe Bot!*\n\n` +
           `Use the following commands:\n` +
-          `🔹 /battle - Find an opponent for a regular match (requires 1 TMT stake).\n` +
+          `🔹 /battle - Find an opponent for a regular match.\n` +
           `🔹 /trophy - Find an opponent for a Trophy Battle (requires 1 TMT stake).\n` +
           `🔹 /profile - View your stats and rank.\n` +
           `🔹 /leaderboard - See the top players.\n\n` +
@@ -709,7 +659,6 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
-
 
 
 
