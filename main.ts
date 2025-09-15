@@ -18,6 +18,7 @@ const ADMIN_USERNAME = "@amangeldimasakov"; // keep as username check, change to
 let queue: string[] = [];
 let trophyQueue: string[] = []; // Queue for trophy battles
 const battles: Record<string, any> = {};
+const searchTimeouts: Record<string, number> = {}; // Track search timeouts for users
 
 // -------------------- Telegram Helpers --------------------
 async function sendMessage(chatId: string, text: string, options: any = {}): Promise<number | null> {
@@ -249,6 +250,16 @@ function makeInlineKeyboard(board: string[], disabled = false) {
 
 // -------------------- Battle Control --------------------
 async function startBattle(p1: string, p2: string, isTrophyBattle: boolean = false) {
+  // Clear any existing search timeout for these players
+  if (searchTimeouts[p1]) {
+    clearTimeout(searchTimeouts[p1]);
+    delete searchTimeouts[p1];
+  }
+  if (searchTimeouts[p2]) {
+    clearTimeout(searchTimeouts[p2]);
+    delete searchTimeouts[p2];
+  }
+
   const battle = {
     players: [p1, p2],
     board: createEmptyBoard(),
@@ -528,8 +539,30 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     }
     queue.push(fromId);
     await sendMessage(fromId, "🔍 Searching for opponent...");
+
+    // Set a 30-second timeout for this search
+    searchTimeouts[fromId] = setTimeout(async () => {
+      // Check if user is still in queue and hasn't been matched
+      const index = queue.indexOf(fromId);
+      if (index !== -1) {
+        queue.splice(index, 1); // Remove from queue
+        delete searchTimeouts[fromId]; // Clean up timeout reference
+        await sendMessage(fromId, "⏱️ Search stopped after 30 seconds. No opponent found.");
+      }
+    }, 30000); // 30 seconds
+
+    // Try to match immediately if possible
     if (queue.length >= 2) {
       const [p1, p2] = queue.splice(0, 2);
+      // Clear timeouts for both players since they are matched
+      if (searchTimeouts[p1]) {
+        clearTimeout(searchTimeouts[p1]);
+        delete searchTimeouts[p1];
+      }
+      if (searchTimeouts[p2]) {
+        clearTimeout(searchTimeouts[p2]);
+        delete searchTimeouts[p2];
+      }
       await startBattle(p1, p2);
     }
     return;
@@ -557,8 +590,31 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     trophyQueue.push(fromId);
     await sendMessage(fromId, "🔍 Searching for opponent for Trophy Battle...\n(1 TMT has been reserved for this match)");
     
+    // Set a 30-second timeout for this search
+    searchTimeouts[fromId] = setTimeout(async () => {
+      // Check if user is still in trophy queue and hasn't been matched
+      const index = trophyQueue.indexOf(fromId);
+      if (index !== -1) {
+        trophyQueue.splice(index, 1); // Remove from queue
+        delete searchTimeouts[fromId]; // Clean up timeout reference
+        // Refund the 1 TMT since search was cancelled
+        await updateProfile(fromId, { tmt: 1 });
+        await sendMessage(fromId, "⏱️ Search stopped after 30 seconds. No opponent found. 1 TMT has been refunded.");
+      }
+    }, 30000); // 30 seconds
+
+    // Try to match immediately if possible
     if (trophyQueue.length >= 2) {
       const [p1, p2] = trophyQueue.splice(0, 2);
+      // Clear timeouts for both players since they are matched
+      if (searchTimeouts[p1]) {
+        clearTimeout(searchTimeouts[p1]);
+        delete searchTimeouts[p1];
+      }
+      if (searchTimeouts[p2]) {
+        clearTimeout(searchTimeouts[p2]);
+        delete searchTimeouts[p2];
+      }
       // Deduct 1 TMT from the second player as well
       await updateProfile(p2, { tmt: -1 });
       await startBattle(p1, p2, true); // true indicates it's a trophy battle
@@ -659,6 +715,7 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
+
 
 
 
