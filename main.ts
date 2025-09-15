@@ -1,3 +1,4 @@
+```typescript
 // main.ts
 // Telegram Tic-Tac-Toe Bot (Deno) - Enhanced Game Design
 // Features: matchmaking (/battle), private-game with inline buttons,
@@ -16,6 +17,7 @@ const kv = await Deno.openKv();
 const ADMIN_USERNAME = "@amangeldimasakov"; // keep as username check, change to ADMIN_ID if you want id-based admin
 
 let queue: string[] = [];
+let trophyQueue: string[] = []; // Queue for trophy battles
 const battles: Record<string, any> = {};
 
 // -------------------- Telegram Helpers --------------------
@@ -243,7 +245,7 @@ function makeInlineKeyboard(board: string[], disabled = false) {
 }
 
 // -------------------- Battle Control --------------------
-async function startBattle(p1: string, p2: string) {
+async function startBattle(p1: string, p2: string, isTrophyBattle: boolean = false) {
   const battle = {
     players: [p1, p2],
     board: createEmptyBoard(),
@@ -253,6 +255,7 @@ async function startBattle(p1: string, p2: string) {
     idleTimerId: undefined as any,
     round: 1,
     roundWins: { [p1]: 0, [p2]: 0 },
+    isTrophyBattle: isTrophyBattle // Add flag for trophy battle
   };
   battles[p1] = battle;
   battles[p2] = battle;
@@ -260,8 +263,11 @@ async function startBattle(p1: string, p2: string) {
   await initProfile(p1);
   await initProfile(p2);
 
-  await sendMessage(p1, `⚔️ *Opponent Found!*\n\nYou are ❌ (X).\n\n*Match Format:* Best of 3 rounds vs ID:${p2}`, { parse_mode: "Markdown" });
-  await sendMessage(p2, `⚔️ *Opponent Found!*\n\nYou are ⭕ (O).\n\n*Match Format:* Best of 3 rounds vs ID:${p1}`, { parse_mode: "Markdown" });
+  const battleTypeText = isTrophyBattle ? "🏆 *Trophy Battle*" : "⚔️ *Regular Battle*";
+  const stakeText = isTrophyBattle ? "\n\n*Stakes:* Both players risk 1 TMT. Winner gets 0.75 TMT back." : "";
+
+  await sendMessage(p1, `${battleTypeText}\n\nYou are ❌ (X).${stakeText}\n\n*Match Format:* Best of 3 rounds vs ID:${p2}`, { parse_mode: "Markdown" });
+  await sendMessage(p2, `${battleTypeText}\n\nYou are ⭕ (O).${stakeText}\n\n*Match Format:* Best of 3 rounds vs ID:${p1}`, { parse_mode: "Markdown" });
   await sendRoundStart(battle);
 }
 
@@ -269,7 +275,8 @@ function headerForPlayer(battle: any, player: string) {
   const opponent = battle.players.find((p: string) => p !== player)!;
   const yourMark = battle.marks[player];
   const opponentMark = battle.marks[opponent];
-  return `🎯 *Tic-Tac-Toe* — You (${yourMark}) vs ID:${opponent} (${opponentMark})`;
+  const battleTypeText = battle.isTrophyBattle ? "🏆 *Trophy Battle*" : "🎯 *Tic-Tac-Toe*";
+  return `${battleTypeText} — You (${yourMark}) vs ID:${opponent} (${opponentMark})`;
 }
 
 async function sendRoundStart(battle: any) {
@@ -293,6 +300,15 @@ async function endBattleIdle(battle: any) {
   const [p1, p2] = battle.players;
   await sendMessage(p1, "⚠️ *Game ended due to inactivity* (5 minutes).", { parse_mode: "Markdown" });
   await sendMessage(p2, "⚠️ *Game ended due to inactivity* (5 minutes).", { parse_mode: "Markdown" });
+  
+  // If it was a trophy battle, refund the 1 TMT to both players
+  if (battle.isTrophyBattle) {
+    await updateProfile(p1, { trophies: 1 });
+    await updateProfile(p2, { trophies: 1 });
+    await sendMessage(p1, "💸 You've been refunded 1 TMT for the idle game.");
+    await sendMessage(p2, "💸 You've been refunded 1 TMT for the idle game.");
+  }
+  
   delete battles[p1];
   delete battles[p2];
 }
@@ -324,11 +340,20 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
     await updateProfile(p2, { gamesPlayed: 1, draws: 1 });
     await sendMessage(p1, "🤝 The match ended in a draw!");
     await sendMessage(p2, "🤝 The match ended in a draw!");
+    
+    // If it was a trophy battle, refund the 1 TMT to both players
+    if (battle.isTrophyBattle) {
+      await updateProfile(p1, { trophies: 1 });
+      await updateProfile(p2, { trophies: 1 });
+      await sendMessage(p1, "💸 You've been refunded 1 TMT for the draw.");
+      await sendMessage(p2, "💸 You've been refunded 1 TMT for the draw.");
+    }
   } else if (result.winner) {
     const winner = result.winner!;
     const loser = result.loser!;
     await initProfile(winner);
     await initProfile(loser);
+    
     // Trophy calculation with a base value
     const trophyChangeWinner = Math.max(1, Math.floor(10 * (1 + (await getProfile(loser))!.trophies / (await getProfile(winner))!.trophies))); // Winner gains more if opponent has more trophies
     const trophyChangeLoser = -Math.max(1, Math.floor(5 * (1 + (await getProfile(winner))!.trophies / (await getProfile(loser))!.trophies))); // Loser loses more if opponent has more trophies
@@ -336,6 +361,15 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
     await updateProfile(loser, { gamesPlayed: 1, losses: 1, trophies: trophyChangeLoser });
     await sendMessage(winner, `🎉 You won the match!\n🏆 *+${trophyChangeWinner} trophies* (vs ID:${loser})`, { parse_mode: "Markdown" });
     await sendMessage(loser, `😢 You lost the match.\n🏆 *${trophyChangeLoser} trophies* (vs ID:${winner})`, { parse_mode: "Markdown" });
+    
+    // Handle trophy battle rewards/penalties
+    if (battle.isTrophyBattle) {
+      // Winner gets 0.75 TMT, loser loses 1 TMT (net -0.25 TMT)
+      await updateProfile(winner, { trophies: -0.25 }); // Net gain is 0.75 (started with 1, ends with 1.75, but we deduct 0.25 from initial stake)
+      await updateProfile(loser, { trophies: -1 }); // Loser loses 1 TMT
+      await sendMessage(winner, "🏆 You received 0.75 TMT for winning the Trophy Battle!");
+      await sendMessage(loser, "💔 You lost 1 TMT for losing the Trophy Battle.");
+    }
   }
 
   delete battles[p1];
@@ -498,6 +532,37 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     return;
   }
 
+  if (text.startsWith("/trophy")) {
+    // Check if player has enough trophies (at least 1 TMT = 1 trophy)
+    const profile = await getProfile(fromId);
+    if (!profile || profile.trophies < 1) {
+      await sendMessage(fromId, "❌ You need at least 1 TMT to enter a Trophy Battle.");
+      return;
+    }
+
+    if (trophyQueue.includes(fromId)) {
+      await sendMessage(fromId, "You are already in the Trophy Battle queue. Please wait for an opponent.");
+      return;
+    }
+    if (battles[fromId]) {
+      await sendMessage(fromId, "You are already in a battle. Finish your current game first.");
+      return;
+    }
+    
+    // Deduct 1 TMT from both players when they join the queue
+    await updateProfile(fromId, { trophies: -1 });
+    trophyQueue.push(fromId);
+    await sendMessage(fromId, "🔍 Searching for opponent for Trophy Battle...\n(1 TMT has been reserved for this match)");
+    
+    if (trophyQueue.length >= 2) {
+      const [p1, p2] = trophyQueue.splice(0, 2);
+      // Deduct 1 TMT from the second player as well
+      await updateProfile(p2, { trophies: -1 });
+      await startBattle(p1, p2, true); // true indicates it's a trophy battle
+    }
+    return;
+  }
+
   if (text.startsWith("/profile")) {
     await sendProfile(fromId);
     return;
@@ -532,7 +597,8 @@ async function handleCommand(fromId: string, username: string | undefined, displ
   if (text.startsWith("/start") || text.startsWith("/help")) {
       const helpText = `🎮 *Welcome to Tic-Tac-Toe Bot!*\n\n` +
           `Use the following commands:\n` +
-          `🔹 /battle - Find an opponent for a match.\n` +
+          `🔹 /battle - Find an opponent for a regular match.\n` +
+          `🔹 /trophy - Find an opponent for a Trophy Battle (requires 1 TMT stake).\n` +
           `🔹 /profile - View your stats and rank.\n` +
           `🔹 /leaderboard - See the top players.\n\n` +
           `Good luck and have fun!`;
