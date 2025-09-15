@@ -267,6 +267,7 @@ async function startBattle(p1: string, p2: string, isTrophyBattle: boolean = fal
     marks: { [p1]: "X", [p2]: "O" },
     messageIds: {} as Record<string, number>,
     idleTimerId: undefined as any,
+    moveTimerId: undefined as any, // Timer for 1-minute inactivity per turn
     round: 1,
     roundWins: { [p1]: 0, [p2]: 0 },
     isTrophyBattle: isTrophyBattle // Add flag for trophy battle
@@ -293,6 +294,23 @@ function headerForPlayer(battle: any, player: string) {
   return `${battleTypeText} — You (${yourMark}) vs ID:${opponent} (${opponentMark})`;
 }
 
+async function endTurnIdle(battle: any) {
+  // If the turn timer expires, the current player surrenders
+  const loser = battle.turn;
+  const winner = battle.players.find((p: string) => p !== loser)!;
+
+  await sendMessage(loser, "⚠️ You took too long to move. You have surrendered.");
+  await sendMessage(winner, "⚠️ Your opponent took too long to move. They have surrendered. You win!");
+
+  // Clear the existing 5-minute idle timer
+  if (battle.idleTimerId) clearTimeout(battle.idleTimerId);
+  // Clear the turn timer
+  if (battle.moveTimerId) clearTimeout(battle.moveTimerId);
+
+  // Finish the match with the inactive player as the loser
+  await finishMatch(battle, { winner: winner, loser: loser });
+}
+
 async function sendRoundStart(battle: any) {
   for (const player of battle.players) {
     const header = headerForPlayer(battle, player);
@@ -306,8 +324,14 @@ async function sendRoundStart(battle: any) {
     const msgId = await sendMessage(player, text, { reply_markup: makeInlineKeyboard(battle.board), parse_mode: "Markdown" });
     if (msgId) battle.messageIds[player] = msgId;
   }
+
+  // Reset the 5-minute game idle timer
   if (battle.idleTimerId) clearTimeout(battle.idleTimerId);
   battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 5 * 60 * 1000); // 5 minutes
+
+  // Set the 1-minute turn timer for the current player
+  if (battle.moveTimerId) clearTimeout(battle.moveTimerId);
+  battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 1 * 60 * 1000); // 1 minute
 }
 
 async function endBattleIdle(battle: any) {
@@ -329,6 +353,7 @@ async function endBattleIdle(battle: any) {
 
 async function finishMatch(battle: any, result: { winner?: string; loser?: string; draw?: boolean }) {
   if (battle.idleTimerId) clearTimeout(battle.idleTimerId);
+  if (battle.moveTimerId) clearTimeout(battle.moveTimerId); // Clear turn timer
   const [p1, p2] = battle.players;
 
   for (const player of battle.players) {
@@ -368,13 +393,11 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
     await initProfile(winner);
     await initProfile(loser);
     
-    // Trophy calculation with a base value
-    const trophyChangeWinner = Math.max(1, Math.floor(10 * (1 + (await getProfile(loser))!.trophies / (await getProfile(winner))!.trophies))); // Winner gains more if opponent has more trophies
-    const trophyChangeLoser = -Math.max(1, Math.floor(5 * (1 + (await getProfile(winner))!.trophies / (await getProfile(loser))!.trophies))); // Loser loses more if opponent has more trophies
-    await updateProfile(winner, { gamesPlayed: 1, wins: 1, trophies: trophyChangeWinner });
-    await updateProfile(loser, { gamesPlayed: 1, losses: 1, trophies: trophyChangeLoser });
-    await sendMessage(winner, `🎉 You won the match!\n🏆 *+${trophyChangeWinner} trophies* (vs ID:${loser})`, { parse_mode: "Markdown" });
-    await sendMessage(loser, `😢 You lost the match.\n🏆 *${trophyChangeLoser} trophies* (vs ID:${winner})`, { parse_mode: "Markdown" });
+    // FIXED: Simple +1/-1 trophy system
+    await updateProfile(winner, { gamesPlayed: 1, wins: 1, trophies: 1 });
+    await updateProfile(loser, { gamesPlayed: 1, losses: 1, trophies: -1 });
+    await sendMessage(winner, `🎉 You won the match!\n🏆 *+1 trophy* (vs ID:${loser})`, { parse_mode: "Markdown" });
+    await sendMessage(loser, `😢 You lost the match.\n🏆 *-1 trophy* (vs ID:${winner})`, { parse_mode: "Markdown" });
     
     // Handle trophy battle rewards/penalties
     if (battle.isTrophyBattle) {
@@ -419,6 +442,10 @@ async function handleCallback(fromId: string, data: string, callbackId: string) 
     // Reset idle timer on any valid interaction
     if (battle.idleTimerId) clearTimeout(battle.idleTimerId);
     battle.idleTimerId = setTimeout(() => endBattleIdle(battle), 5 * 60 * 1000);
+
+    // Reset the 1-minute turn timer when a move is made or surrender is clicked
+    if (battle.moveTimerId) clearTimeout(battle.moveTimerId);
+    battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 1 * 60 * 1000);
 
     if (data === "surrender") {
       const opponent = battle.players.find((p: string) => p !== fromId)!;
@@ -498,6 +525,11 @@ async function handleCallback(fromId: string, data: string, callbackId: string) 
       battle.round++;
       battle.board = createEmptyBoard();
       battle.turn = battle.players[(battle.round - 1) % 2]; // Alternate who starts
+
+      // Reset turn timer for the new round
+      if (battle.moveTimerId) clearTimeout(battle.moveTimerId);
+      battle.moveTimerId = setTimeout(() => endTurnIdle(battle), 1 * 60 * 1000);
+
       await sendRoundStart(battle);
       await answerCallbackQuery(callbackId, "Move played!");
       return;
@@ -715,6 +747,7 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
+
 
 
 
