@@ -1,4 +1,3 @@
-```typescript
 // main.ts
 // Telegram Tic-Tac-Toe Bot (Deno)
 // Features: matchmaking (/battle), private-game with inline buttons,
@@ -16,90 +15,8 @@ const SECRET_PATH = "/masakoffvpnhelper";
 const kv = await Deno.openKv();
 const ADMIN_USERNAME = "@amangeldimasakov"; // keep as username check, change to ADMIN_ID if you want id-based admin
 
-type Profile = {
-  id: string;
-  username?: string;
-  displayName: string;
-  trophies: number;
-  tmt: number;
-  gamesPlayed: number;
-  wins: number;
-  losses: number;
-  draws: number;
-  lastActive: number;
-};
-
-function getDisplayName(p: Profile) {
-  return `ID:${p.id}`;
-}
-
-async function initProfile(userId: string, username?: string, displayName?: string) {
-  const key = ["profiles", userId];
-  const value = await kv.get(key);
-  if (!value.value) {
-    const profile: Profile = {
-      id: userId,
-      username,
-      displayName: displayName || userId,
-      trophies: 0,
-      tmt: 0,
-      gamesPlayed: 0,
-      wins: 0,
-      losses: 0,
-      draws: 0,
-      lastActive: Date.now(),
-    };
-    await kv.set(key, profile);
-    return profile;
-  } else {
-    const existing = value.value as Profile;
-    let changed = false;
-    if (username && username !== existing.username) {
-      existing.username = username;
-      changed = true;
-    }
-    if (displayName && displayName !== existing.displayName) {
-      existing.displayName = displayName;
-      changed = true;
-    }
-    existing.lastActive = Date.now();
-    if (changed) await kv.set(key, existing);
-    return existing;
-  }
-}
-
-async function getProfile(userId: string): Promise<Profile | null> {
-  const res = await kv.get(["profiles", userId]);
-  return (res.value as Profile) ?? null;
-}
-
-/**
- * delta fields are additive (numbers to add). Example:
- * updateProfile("123", { trophies: 10, wins: 1 })
- */
-async function updateProfile(userId: string, delta: Partial<Profile>) {
-  const existing = (await getProfile(userId)) || (await initProfile(userId));
-  const newProfile: Profile = {
-    ...existing,
-    ...delta,
-    trophies: Math.max(0, (existing.trophies || 0) + (delta.trophies ?? 0)), // never below 0
-    tmt: (existing.tmt || 0) + (delta.tmt ?? 0),
-    gamesPlayed: (existing.gamesPlayed || 0) + (delta.gamesPlayed ?? 0),
-    wins: (existing.wins || 0) + (delta.wins ?? 0),
-    losses: (existing.losses || 0) + (delta.losses ?? 0),
-    draws: (existing.draws || 0) + (delta.draws ?? 0),
-    lastActive: Date.now(),
-  };
-  await kv.set(["profiles", userId], newProfile);
-  return newProfile;
-}
-
-function getRank(trophies: number) {
-  if (trophies < 1000) return "🥉 Bronze";
-  if (trophies < 1500) return "🥈 Silver";
-  if (trophies < 2000) return "🥇 Gold";
-  return "💎 Diamond";
-}
+let queue: string[] = [];
+const battles: Record<string, any> = {};
 
 // -------------------- Telegram Helpers --------------------
 async function sendMessage(chatId: string, text: string, options: any = {}): Promise<number | null> {
@@ -141,7 +58,85 @@ async function answerCallbackQuery(id: string, text = "") {
   }
 }
 
-// -------------------- Profile UI --------------------
+// -------------------- Profile Helpers --------------------
+type Profile = {
+  id: string;
+  username?: string;
+  displayName: string;
+  trophies: number;
+  gamesPlayed: number;
+  wins: number;
+  losses: number;
+  draws: number;
+  lastActive: number;
+};
+
+function getDisplayName(p: Profile) {
+  return `ID:${p.id}`;
+}
+
+async function initProfile(userId: string, username?: string, displayName?: string) {
+  const key = ["profiles", userId];
+  const value = await kv.get(key);
+  if (!value.value) {
+    const profile: Profile = {
+      id: userId,
+      username,
+      displayName: displayName || userId,
+      trophies: 0,
+      gamesPlayed: 0,
+      wins: 0,
+      losses: 0,
+      draws: 0,
+      lastActive: Date.now(),
+    };
+    await kv.set(key, profile);
+    return profile;
+  } else {
+    const existing = value.value as Profile;
+    let changed = false;
+    if (username && username !== existing.username) {
+      existing.username = username;
+      changed = true;
+    }
+    if (displayName && displayName !== existing.displayName) {
+      existing.displayName = displayName;
+      changed = true;
+    }
+    existing.lastActive = Date.now();
+    if (changed) await kv.set(key, existing);
+    return existing;
+  }
+}
+
+async function getProfile(userId: string): Promise<Profile | null> {
+  const res = await kv.get(["profiles", userId]);
+  return (res.value as Profile) ?? null;
+}
+
+async function updateProfile(userId: string, delta: Partial<Profile>) {
+  const existing = (await getProfile(userId)) || (await initProfile(userId));
+  const newProfile: Profile = {
+    ...existing,
+    ...delta,
+    trophies: (existing.trophies || 0) + (delta.trophies ?? 0),
+    gamesPlayed: (existing.gamesPlayed || 0) + (delta.gamesPlayed ?? 0),
+    wins: (existing.wins || 0) + (delta.wins ?? 0),
+    losses: (existing.losses || 0) + (delta.losses ?? 0),
+    draws: (existing.draws || 0) + (delta.draws ?? 0),
+    lastActive: Date.now(),
+  };
+  await kv.set(["profiles", userId], newProfile);
+  return newProfile;
+}
+
+function getRank(trophies: number) {
+  if (trophies < 1000) return "🥉 Bronze";
+  if (trophies < 1500) return "🥈 Silver";
+  if (trophies < 2000) return "🥇 Gold";
+  return "💎 Diamond";
+}
+
 async function sendProfile(chatId: string) {
   await initProfile(chatId);
   const p = (await getProfile(chatId))!;
@@ -150,27 +145,12 @@ async function sendProfile(chatId: string) {
   const msg =
     `🏅 Profile of ID:${p.id}\n` +
     `Trophies: ${p.trophies} 🏆\n` +
-    `TMT: ${p.tmt}\n` +
     `Rank: ${getRank(p.trophies)}\n` +
     `Games: ${p.gamesPlayed}\n` +
     `Wins: ${p.wins} | Losses: ${p.losses} | Draws: ${p.draws}\n` +
     `Win Rate: ${winRate}%\n` +
     `Last active: ${date}`;
-  
-  // Create inline keyboard for profile commands
-  const keyboard = {
-    inline_keyboard: [
-      [
-        { text: "Battle (Trophy)", callback_data: "battle:trophy" },
-        { text: "Battle (TMT)", callback_data: "battle:tmt" }
-      ],
-      [
-        { text: "Leaderboard", callback_data: "leaderboard:0" }
-      ]
-    ]
-  };
-  
-  await sendMessage(chatId, msg, { reply_markup: keyboard });
+  await sendMessage(chatId, msg);
 }
 
 // -------------------- Leaderboard Helpers --------------------
@@ -198,7 +178,7 @@ async function sendLeaderboard(chatId: string, page = 0) {
     const rankNum = offset + i + 1;
     const name = `ID:${p.id}`;
     const winRate = p.gamesPlayed ? ((p.wins / p.gamesPlayed) * 100).toFixed(1) : "0";
-    msg += `${rankNum}. ${name} — 🏆 ${p.trophies} | TMT: ${p.tmt} | Wins: ${p.wins}, Losses: ${p.losses}, Draws: ${p.draws} | WinRate: ${winRate}%\n`;
+    msg += `${rankNum}. ${name} — 🏆 ${p.trophies} | Wins: ${p.wins}, Losses: ${p.losses}, Draws: ${p.draws} | WinRate: ${winRate}%\n`;
   });
 
   const keyboard: any = { inline_keyboard: [] };
@@ -249,24 +229,8 @@ function makeInlineKeyboard(board: string[]) {
   return { inline_keyboard: keyboard };
 }
 
-// -------------------- Queue & Battles --------------------
-// queue item: { id: string, mode: 'trophy'|'tmt', timerId: number }
-let queue: Array<{ id: string; mode: "trophy" | "tmt"; timerId?: number }> = [];
-const battles: Record<string, any> = {};
-
-function findQueueIndex(userId: string) {
-  return queue.findIndex((q) => q.id === userId);
-}
-
-function removeFromQueueByIndex(idx: number) {
-  if (idx < 0 || idx >= queue.length) return;
-  const item = queue[idx];
-  if (item.timerId) clearTimeout(item.timerId);
-  queue.splice(idx, 1);
-}
-
 // -------------------- Battle Control --------------------
-async function startBattle(p1: string, p2: string, mode: "trophy" | "tmt") {
+async function startBattle(p1: string, p2: string) {
   const battle = {
     players: [p1, p2],
     board: createEmptyBoard(),
@@ -276,7 +240,6 @@ async function startBattle(p1: string, p2: string, mode: "trophy" | "tmt") {
     idleTimerId: undefined as any,
     round: 1,
     roundWins: { [p1]: 0, [p2]: 0 },
-    mode,
   };
   battles[p1] = battle;
   battles[p2] = battle;
@@ -284,8 +247,8 @@ async function startBattle(p1: string, p2: string, mode: "trophy" | "tmt") {
   await initProfile(p1);
   await initProfile(p2);
 
-  await sendMessage(p1, `Opponent found! You are ❌ (X). Best of 3 rounds vs ID:${p2} [mode: ${mode}]`);
-  await sendMessage(p2, `Opponent found! You are ⭕ (O). Best of 3 rounds vs ID:${p1} [mode: ${mode}]`);
+  await sendMessage(p1, `Opponent found! You are ❌ (X). Best of 3 rounds vs ID:${p2}`);
+  await sendMessage(p2, `Opponent found! You are ⭕ (O). Best of 3 rounds vs ID:${p1}`);
   await sendRoundStart(battle);
 }
 
@@ -317,19 +280,17 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
   if (battle.idleTimerId) clearTimeout(battle.idleTimerId);
   const [p1, p2] = battle.players;
 
-  // Delete all battle messages
   for (const player of battle.players) {
     const msgId = battle.messageIds[player];
+    const header = headerForPlayer(battle, player);
+    let text: string;
+    if (result.draw) text = `${header}\nMatch ended in a draw!${boardToText(battle.board)}`;
+    else if (result.winner === player) text = `${header}\nYou won the match! 🎉${boardToText(battle.board)}`;
+    else text = `${header}\nYou lost the match.${boardToText(battle.board)}`;
     if (msgId) {
-      try {
-        await fetch(`${API}/deleteMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: player, message_id: msgId }),
-        });
-      } catch (e) {
-        console.warn("Failed to delete message", e);
-      }
+      await editMessageText(player, msgId, text, {});
+    } else {
+      await sendMessage(player, text);
     }
   }
 
@@ -343,32 +304,14 @@ async function finishMatch(battle: any, result: { winner?: string; loser?: strin
     const loser = result.loser!;
     await initProfile(winner);
     await initProfile(loser);
-
-    if (battle.mode === "trophy") {
-      // Trophy mode: winner +10, loser -5 (but trophies never go below 0)
-      await updateProfile(winner, { gamesPlayed: 1, wins: 1, trophies: 10 });
-      await updateProfile(loser, { gamesPlayed: 1, losses: 1, trophies: -5 });
-      const wp = await getProfile(winner);
-      const lp = await getProfile(loser);
-      await sendMessage(winner, `🎉 You won the match! +10 trophies (vs ID:${loser}) — Total: ${wp?.trophies ?? "?"}`);
-      await sendMessage(loser, `😢 You lost the match. -5 trophies (vs ID:${winner}) — Total: ${lp?.trophies ?? "?"}`);
-    } else {
-      // TMT mode: winner +0.75 TMT, loser -1 TMT
-      await updateProfile(winner, { gamesPlayed: 1, wins: 1, tmt: 0.75 });
-      await updateProfile(loser, { gamesPlayed: 1, losses: 1, tmt: -1 });
-      const wp = await getProfile(winner);
-      const lp = await getProfile(loser);
-      await sendMessage(winner, `🎉 You won the match! +0.75 TMT (vs ID:${loser}) — TMT: ${wp?.tmt ?? "?"}`);
-      await sendMessage(loser, `😢 You lost the match. -1 TMT (vs ID:${winner}) — TMT: ${lp?.tmt ?? "?"}`);
-    }
+    await updateProfile(winner, { gamesPlayed: 1, wins: 1, trophies: 0.85 });
+    await updateProfile(loser, { gamesPlayed: 1, losses: 1, trophies: -1 });
+    await sendMessage(winner, `🎉 You won the match! +10 trophies (vs ID:${loser})`);
+    await sendMessage(loser, `😢 You lost the match. -5 trophies (vs ID:${winner})`);
   }
 
   delete battles[p1];
   delete battles[p2];
-  
-  // Send profile after match
-  await sendProfile(p1);
-  await sendProfile(p2);
 }
 
 // -------------------- Callback --------------------
@@ -377,13 +320,6 @@ async function handleCallback(fromId: string, data: string, callbackId: string) 
     if (data.startsWith("leaderboard:")) {
       const page = parseInt(data.split(":")[1]) || 0;
       await sendLeaderboard(fromId, page);
-      await answerCallbackQuery(callbackId);
-      return;
-    }
-    
-    if (data.startsWith("battle:")) {
-      const mode = data.split(":")[1] as "trophy" | "tmt";
-      await handleBattleCommand(fromId, mode);
       await answerCallbackQuery(callbackId);
       return;
     }
@@ -480,97 +416,22 @@ async function handleCallback(fromId: string, data: string, callbackId: string) 
 }
 
 // -------------------- Command Handlers --------------------
-async function handleBattleCommand(fromId: string, mode: "trophy" | "tmt") {
-  // check if already in queue or in battle
-  if (findQueueIndex(fromId) !== -1) {
-    await sendMessage(fromId, "You are already in the queue.");
-    return;
-  }
-  if (battles[fromId]) {
-    await sendMessage(fromId, "You are already in a battle.");
-    return;
-  }
-
-  // init profile
-  await initProfile(fromId);
-
-  if (mode === "tmt") {
-    const p = await getProfile(fromId);
-    if (!p || (p.tmt ?? 0) < 1) {
-      await sendMessage(fromId, "You need at least 1 TMT to join TMT matches.");
-      return;
-    }
-  }
-
-  const item = { id: fromId, mode: mode === "tmt" ? "tmt" : "trophy", timerId: undefined as any };
-  queue.push(item);
-  await sendMessage(fromId, `Searching for opponent... [mode: ${item.mode}]`);
-
-  // start a 30s search timeout — if not paired, remove and notify
-  item.timerId = setTimeout(async () => {
-    const idx = findQueueIndex(fromId);
-    if (idx !== -1) {
-      removeFromQueueByIndex(idx);
-      await sendMessage(fromId, "Opponent not found — try again.");
-    }
-  }, 30 * 1000);
-
-  // try to find opponent: match earliest other queue item with same mode
-  if (queue.length >= 2) {
-    // find first other item in queue with same mode
-    const idx = findQueueIndex(fromId);
-    if (idx !== -1) {
-      let foundIdx = -1;
-      for (let i = 0; i < queue.length; i++) {
-        if (i === idx) continue;
-        if (queue[i].mode === queue[idx].mode) {
-          foundIdx = i;
-          break;
-        }
-      }
-      if (foundIdx !== -1) {
-        // pick p1 = queue[idx], p2 = queue[foundIdx], remove them (ensure idx<foundIdx ordering)
-        const firstIndex = Math.min(idx, foundIdx);
-        const secondIndex = Math.max(idx, foundIdx);
-        const p1item = queue[firstIndex];
-        const p2item = queue[secondIndex];
-        removeFromQueueByIndex(secondIndex); // remove higher index first
-        removeFromQueueByIndex(firstIndex);
-
-        // clear timers if any
-        if (p1item.timerId) clearTimeout(p1item.timerId);
-        if (p2item.timerId) clearTimeout(p2item.timerId);
-
-        // For TMT mode double-check both still have >=1 TMT
-        if (p1item.mode === "tmt") {
-          const p1prof = await getProfile(p1item.id);
-          const p2prof = await getProfile(p2item.id);
-          if ((p1prof?.tmt ?? 0) < 1) {
-            await sendMessage(p1item.id, "You no longer have 1 TMT — cannot start TMT match.");
-            // return the other to queue? let's notify the other to requeue
-            await sendMessage(p2item.id, "Opponent didn't have enough TMT. Re-queue if you want.");
-            return;
-          }
-          if ((p2prof?.tmt ?? 0) < 1) {
-            await sendMessage(p2item.id, "You no longer have 1 TMT — cannot start TMT match.");
-            await sendMessage(p1item.id, "Opponent didn't have enough TMT. Re-queue if you want.");
-            return;
-          }
-        }
-
-        await startBattle(p1item.id, p2item.id, p1item.mode === "tmt" ? "tmt" : "trophy");
-      }
-    }
-  }
-  return;
-}
-
 async function handleCommand(fromId: string, username: string | undefined, displayName: string, text: string) {
   if (text.startsWith("/battle")) {
-    // modes: "/battle" (trophy) or "/battle tmt"
-    const parts = text.split(" ").filter(Boolean);
-    const mode = parts[1] === "tmt" ? "tmt" : "trophy";
-    await handleBattleCommand(fromId, mode);
+    if (queue.includes(fromId)) {
+      await sendMessage(fromId, "You are already in the queue.");
+      return;
+    }
+    if (battles[fromId]) {
+      await sendMessage(fromId, "You are already in a battle.");
+      return;
+    }
+    queue.push(fromId);
+    await sendMessage(fromId, "Searching for opponent...");
+    if (queue.length >= 2) {
+      const [p1, p2] = queue.splice(0, 2);
+      await startBattle(p1, p2);
+    }
     return;
   }
 
@@ -585,68 +446,23 @@ async function handleCommand(fromId: string, username: string | undefined, displ
   }
 
   if (text.startsWith("/addtouser")) {
-    // supports:
-    // /addtouser <userId> <trophies>   (backwards-compatible — treats second arg as userId)
-    // /addtouser tmt <userId> <amount>
-    // /addtouser trophies <userId> <amount>
     if (username !== ADMIN_USERNAME.replace("@", "")) {
       await sendMessage(fromId, "Unauthorized.");
       return;
     }
-    const parts = text.split(" ").filter(Boolean);
+    const parts = text.split(" ");
     if (parts.length < 3) {
-      await sendMessage(fromId, "Usage:\n/addtouser <userId> <trophies>\n/addtouser tmt <userId> <amount>");
+      await sendMessage(fromId, "Usage: /addtouser <userId> <trophies>");
       return;
     }
-
-    if (parts[1] === "tmt") {
-      if (parts.length < 4) {
-        await sendMessage(fromId, "Usage: /addtouser tmt <userId> <amount>");
-        return;
-      }
-      const userId = parts[2];
-      const amt = parseFloat(parts[3]);
-      if (isNaN(amt)) {
-        await sendMessage(fromId, "Invalid amount.");
-        return;
-      }
-      await updateProfile(userId, { tmt: amt });
-      const p = await getProfile(userId);
-      await sendMessage(fromId, `Added ${amt} TMT to ID:${userId}. New TMT: ${p?.tmt ?? "?"}`);
+    const userId = parts[1];
+    const trophies = parseInt(parts[2]);
+    if (isNaN(trophies)) {
+      await sendMessage(fromId, "Invalid trophies value.");
       return;
     }
-
-    if (parts[1] === "trophies" || parts[1] === "trophy") {
-      if (parts.length < 4) {
-        await sendMessage(fromId, "Usage: /addtouser trophies <userId> <amount>");
-        return;
-      }
-      const userId = parts[2];
-      const amt = parseInt(parts[3]);
-      if (isNaN(amt)) {
-        await sendMessage(fromId, "Invalid trophies value.");
-        return;
-      }
-      await updateProfile(userId, { trophies: amt });
-      const p = await getProfile(userId);
-      await sendMessage(fromId, `Added ${amt} trophies to ID:${userId}. New trophies: ${p?.trophies ?? "?"}`);
-      return;
-    }
-
-    // backward-compatible: /addtouser <userId> <trophies>
-    if (parts.length >= 3) {
-      const userId = parts[1];
-      const trophies = parseInt(parts[2]);
-      if (isNaN(trophies)) {
-        await sendMessage(fromId, "Invalid trophies value.");
-        return;
-      }
-      await updateProfile(userId, { trophies });
-      const p = await getProfile(userId);
-      await sendMessage(fromId, `Added ${trophies} trophies to ID:${userId}. New trophies: ${p?.trophies ?? "?"}`);
-      return;
-    }
-
+    await updateProfile(userId, { trophies });
+    await sendMessage(fromId, `Added ${trophies} trophies to ID:${userId}`);
     return;
   }
 
@@ -673,9 +489,6 @@ serve(async (req: Request) => {
 
       if (text.startsWith("/")) {
         await handleCommand(fromId, username, displayName, text);
-      } else {
-        // If it's not a command, show profile
-        await sendProfile(fromId);
       }
     } else if (update.callback_query) {
       const cb = update.callback_query;
@@ -689,4 +502,11 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
+
+
+
+
+
+
+
 
