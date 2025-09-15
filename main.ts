@@ -1,4 +1,3 @@
-
 // main.ts
 // Telegram Tic-Tac-Toe Bot (Deno) - Enhanced Game Design
 // Features: matchmaking (/battle), private-game with inline buttons,
@@ -16,13 +15,9 @@ const SECRET_PATH = "/masakoffvpnhelper"; // Make sure this matches your webhook
 const kv = await Deno.openKv();
 const ADMIN_USERNAME = "@amangeldimasakov"; // keep as username check, change to ADMIN_ID if you want id-based admin
 
-// --- Matchmaking State ---
 let queue: string[] = [];
 let trophyQueue: string[] = []; // Queue for trophy battles
 const battles: Record<string, any> = {};
-
-// --- Search Timeout Tracking ---
-const searchTimeouts: Record<string, number> = {}; // Store timeout IDs for each searching user
 
 // -------------------- Telegram Helpers --------------------
 async function sendMessage(chatId: string, text: string, options: any = {}): Promise<number | null> {
@@ -254,16 +249,6 @@ function makeInlineKeyboard(board: string[], disabled = false) {
 
 // -------------------- Battle Control --------------------
 async function startBattle(p1: string, p2: string, isTrophyBattle: boolean = false) {
-  // Clear any existing search timeout for these players
-  if (searchTimeouts[p1]) {
-    clearTimeout(searchTimeouts[p1]);
-    delete searchTimeouts[p1];
-  }
-  if (searchTimeouts[p2]) {
-    clearTimeout(searchTimeouts[p2]);
-    delete searchTimeouts[p2];
-  }
-
   const battle = {
     players: [p1, p2],
     board: createEmptyBoard(),
@@ -543,30 +528,8 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     }
     queue.push(fromId);
     await sendMessage(fromId, "🔍 Searching for opponent...");
-
-    // Set a timeout to cancel search after 30 seconds
-    const timeoutId = setTimeout(async () => {
-        const index = queue.indexOf(fromId);
-        if (index !== -1) {
-            queue.splice(index, 1);
-            await sendMessage(fromId, "⏱️ No opponent found within 30 seconds. Search stopped.");
-        }
-        // Clean up the timeout reference
-        delete searchTimeouts[fromId];
-    }, 30000);
-    searchTimeouts[fromId] = timeoutId; // Store the timeout ID
-
     if (queue.length >= 2) {
       const [p1, p2] = queue.splice(0, 2);
-      // Clear timeouts for matched players
-      if (searchTimeouts[p1]) {
-        clearTimeout(searchTimeouts[p1]);
-        delete searchTimeouts[p1];
-      }
-      if (searchTimeouts[p2]) {
-        clearTimeout(searchTimeouts[p2]);
-        delete searchTimeouts[p2];
-      }
       await startBattle(p1, p2);
     }
     return;
@@ -589,55 +552,19 @@ async function handleCommand(fromId: string, username: string | undefined, displ
       return;
     }
     
-    // Deduct 1 TMT from the player when they join the queue
+    // Deduct 1 TMT from both players when they join the queue
     await updateProfile(fromId, { tmt: -1 });
     trophyQueue.push(fromId);
     await sendMessage(fromId, "🔍 Searching for opponent for Trophy Battle...\n(1 TMT has been reserved for this match)");
-
-    // Set a timeout to cancel search after 30 seconds and refund TMT
-    const timeoutId = setTimeout(async () => {
-        const index = trophyQueue.indexOf(fromId);
-        if (index !== -1) {
-            trophyQueue.splice(index, 1);
-            // Refund the 1 TMT
-            await updateProfile(fromId, { tmt: 1 });
-            await sendMessage(fromId, "⏱️ No opponent found within 30 seconds. Search stopped. 1 TMT refunded.");
-        }
-        // Clean up the timeout reference
-        delete searchTimeouts[fromId];
-    }, 30000);
-    searchTimeouts[fromId] = timeoutId; // Store the timeout ID
-
+    
     if (trophyQueue.length >= 2) {
       const [p1, p2] = trophyQueue.splice(0, 2);
-      // Clear timeouts for matched players
-      if (searchTimeouts[p1]) {
-        clearTimeout(searchTimeouts[p1]);
-        delete searchTimeouts[p1];
-      }
-      if (searchTimeouts[p2]) {
-        clearTimeout(searchTimeouts[p2]);
-        delete searchTimeouts[p2];
-      }
-      // Deduct 1 TMT from the second player as well (if not already deducted)
-      // This logic assumes the first player's deduction happens above.
-      // The second player's deduction happens here if they just joined.
-      // A more robust system might track if the deduction happened.
-      // For simplicity, we assume it's handled correctly by the queue logic.
-      // If p2 just joined, their TMT is deducted here. If they joined earlier, it's already deducted.
-      // This is a slight simplification but works for the current flow.
-      // Let's re-deduct for p2 to be safe, assuming the initial check was just for eligibility.
-      // This avoids race conditions where p2 might not have had TMT deducted yet if they joined simultaneously.
-      // A better approach would be to deduct upon entering the queue for both players atomically.
-      // However, for this patch, we'll re-deduct for p2 to ensure consistency.
-      // Note: This might deduct twice if p2 joined earlier. A more complex state management is needed.
-      // For now, we proceed with the deduction for p2 here.
+      // Deduct 1 TMT from the second player as well
       await updateProfile(p2, { tmt: -1 });
       await startBattle(p1, p2, true); // true indicates it's a trophy battle
     }
     return;
   }
-
 
   if (text.startsWith("/profile")) {
     await sendProfile(fromId);
@@ -732,9 +659,6 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
-
-
-
 
 
 
