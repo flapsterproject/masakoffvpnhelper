@@ -3,6 +3,7 @@
 // Features: matchmaking (/battle), private-game with inline buttons,
 // profiles with stats (Deno KV), leaderboard with pagination, admin (/addtouser)
 // Match = best of 3 rounds
+// Added: Withdrawal functionality (/withdraw)
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
@@ -19,6 +20,9 @@ let queue: string[] = [];
 let trophyQueue: string[] = []; // Queue for trophy battles
 const battles: Record<string, any> = {};
 const searchTimeouts: Record<string, number> = {}; // Track search timeouts for users
+
+// Track users who are in the middle of withdrawal process
+const withdrawalStates: Record<string, { amount: number; step: 'amount' | 'phone' }> = {};
 
 // -------------------- Telegram Helpers --------------------
 async function sendMessage(chatId: string, text: string, options: any = {}): Promise<number | null> {
@@ -558,6 +562,98 @@ async function handleCallback(fromId: string, data: string, callbackId: string) 
   }
 }
 
+// -------------------- Withdrawal Functionality --------------------
+async function handleWithdrawal(fromId: string, text: string) {
+  // Check if user is already in withdrawal process
+  if (withdrawalStates[fromId]) {
+    const state = withdrawalStates[fromId];
+    
+    if (state.step === 'amount') {
+      // User is entering amount
+      const amount = parseFloat(text);
+      
+      if (isNaN(amount) || amount <= 0) {
+        await sendMessage(fromId, "❌ Please enter a valid positive number for the withdrawal amount.");
+        return;
+      }
+      
+      // Check if user has enough balance
+      const profile = await getProfile(fromId);
+      if (!profile || profile.tmt < amount) {
+        await sendMessage(fromId, `❌ You don't have enough TMT. Your current balance is ${profile?.tmt || 0} TMT.`);
+        delete withdrawalStates[fromId]; // Reset state
+        return;
+      }
+      
+      // Store amount and move to next step
+      withdrawalStates[fromId] = { amount, step: 'phone' };
+      await sendMessage(fromId, "📱 Please enter your phone number for the withdrawal:");
+      return;
+    } else if (state.step === 'phone') {
+      // User is entering phone number
+      const phoneNumber = text.trim();
+      
+      // Basic phone number validation (you might want to enhance this)
+      if (phoneNumber.length < 5) {
+        await sendMessage(fromId, "❌ Please enter a valid phone number.");
+        return;
+      }
+      
+      const amount = state.amount;
+      
+      // Get user profile
+      const profile = await getProfile(fromId);
+      if (!profile || profile.tmt < amount) {
+        await sendMessage(fromId, "❌ Error: Insufficient balance. Please try again.");
+        delete withdrawalStates[fromId];
+        return;
+      }
+      
+      // Process withdrawal
+      try {
+        // Deduct amount from user's balance
+        await updateProfile(fromId, { tmt: -amount });
+        
+        // Send confirmation to user
+        await sendMessage(fromId, `✅ Withdrawal request submitted!\n\nAmount: ${amount} TMT\nPhone: ${phoneNumber}\n\nYour request is now in progress. Please wait for processing.`);
+        
+        // Send notification to admin
+        const adminId = (await getProfileByUsername(ADMIN_USERNAME.replace("@", "")))?.id || ADMIN_USERNAME;
+        const userDisplayName = profile.displayName || `ID:${fromId}`;
+        const adminMessage = `💰 *WITHDRAWAL REQUEST*\n\nUser: ${userDisplayName} (ID: ${fromId})\nAmount: ${amount} TMT\nPhone: ${phoneNumber}\n\nPlease process this withdrawal manually.`;
+        
+        await sendMessage(adminId, adminMessage, { parse_mode: "Markdown" });
+        
+        // Clear withdrawal state
+        delete withdrawalStates[fromId];
+        
+      } catch (error) {
+        console.error("Withdrawal processing error:", error);
+        await sendMessage(fromId, "❌ An error occurred while processing your withdrawal. Please try again later.");
+        delete withdrawalStates[fromId];
+      }
+      
+      return;
+    }
+  } else {
+    // User is starting withdrawal process
+    await sendMessage(fromId, "💰 Enter the amount of TMT you want to withdraw:");
+    withdrawalStates[fromId] = { amount: 0, step: 'amount' };
+    return;
+  }
+}
+
+// Helper function to find profile by username
+async function getProfileByUsername(username: string): Promise<Profile | null> {
+  for await (const entry of kv.list({ prefix: ["profiles"] })) {
+    const profile = entry.value as Profile;
+    if (profile.username === username) {
+      return profile;
+    }
+  }
+  return null;
+}
+
 // -------------------- Command Handlers --------------------
 async function handleCommand(fromId: string, username: string | undefined, displayName: string, text: string) {
   if (text.startsWith("/battle")) {
@@ -696,16 +792,36 @@ async function handleCommand(fromId: string, username: string | undefined, displ
     return;
   }
 
+  if (text.startsWith("/withdraw")) {
+    // Check if user has a profile
+    const profile = await getProfile(fromId);
+    if (!profile) {
+      await sendMessage(fromId, "❌ You need to have a profile to withdraw TMT. Start playing first!");
+      return;
+    }
+    
+    // Start withdrawal process
+    await handleWithdrawal(fromId, "");
+    return;
+  }
+
   if (text.startsWith("/start") || text.startsWith("/help")) {
       const helpText = `🎮 *Welcome to Tic-Tac-Toe Bot!*\n\n` +
           `Use the following commands:\n` +
           `🔹 /battle - Find an opponent for a regular match.\n` +
           `🔹 /trophy - Find an opponent for a Trophy Battle (requires 1 TMT stake).\n` +
           `🔹 /profile - View your stats and rank.\n` +
-          `🔹 /leaderboard - See the top players.\n\n` +
+          `🔹 /leaderboard - See the top players.\n` +
+          `🔹 /withdraw - Withdraw your TMT balance.\n\n` +
           `Good luck and have fun!`;
        await sendMessage(fromId, helpText, { parse_mode: "Markdown" });
        return;
+  }
+
+  // Handle text messages during withdrawal process
+  if (withdrawalStates[fromId]) {
+    await handleWithdrawal(fromId, text);
+    return;
   }
 
   await sendMessage(fromId, "❓ Unknown command. Type /help for a list of commands.");
@@ -732,8 +848,13 @@ serve(async (req: Request) => {
       if (text.startsWith("/")) {
         await handleCommand(fromId, username, displayName, text);
       } else {
+        // Handle non-command messages (could be withdrawal input)
+        if (withdrawalStates[fromId]) {
+          await handleWithdrawal(fromId, text);
+        } else {
           // Handle non-command messages, e.g., send help
           await sendMessage(fromId, "Type /help to see available commands.");
+        }
       }
     } else if (update.callback_query) {
       const cb = update.callback_query;
@@ -747,7 +868,6 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
-
 
 
 
