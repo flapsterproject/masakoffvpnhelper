@@ -1,3 +1,4 @@
+
 // main.ts
 // Telegram Tic-Tac-Toe Bot (Deno) - Enhanced Game Design
 // Features: matchmaking (/battle), private-game with inline buttons,
@@ -459,7 +460,7 @@ async function handleCallback(fromId: string, data: string, callbackId: string) 
       return;
     }
 
-    if (!data.startsWith("Hereket:")) {
+    if (!data.startsWith("hereket:")) {
       await answerCallbackQuery(callbackId);
       return;
     }
@@ -867,6 +868,7 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
+
 
 
 
