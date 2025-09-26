@@ -1,31 +1,15 @@
 // main.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
-const TOKEN = Deno.env.get("BOT_TOKEN")!;
+// -------------------- Telegram Setup --------------------
+const TOKEN = Deno.env.get("BOT_TOKEN");
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
 
 const API = `https://api.telegram.org/bot${TOKEN}`;
-const SECRET_PATH = "/masakoffhelper";
+const SECRET_PATH = "/masakoffvpnhelper";
 
-// Deno KV
-const kv = await Deno.openKv();
-const ADMIN_USERNAME = "@amangeldimasakov"; // Change if needed
-
-// External downloader API (for simplicity)
-// You can replace with your own service or library
-async function fetchDownloadUrl(url: string): Promise<string | null> {
-  try {
-    // Example free API (may have limits)
-    const res = await fetch(`https://save-from.net/api/convert?url=${encodeURIComponent(url)}`);
-    const data = await res.json();
-    return data?.url || null;
-  } catch (e) {
-    console.error("Downloader error:", e);
-    return null;
-  }
-}
-
-async function sendMessage(chatId: number, text: string) {
+// -------------------- Helpers --------------------
+async function sendMessage(chatId: string, text: string) {
   await fetch(`${API}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -33,15 +17,13 @@ async function sendMessage(chatId: number, text: string) {
   });
 }
 
-async function sendVideo(chatId: number, videoUrl: string) {
-  await fetch(`${API}/sendVideo`, {
-    method: "POST",
-    body: JSON.stringify({
-      chat_id: chatId,
-      video: videoUrl,
-    }),
-    headers: { "Content-Type": "application/json" },
-  });
+async function sendVideoFile(chatId: string, filePath: string) {
+  const fileData = await Deno.readFile(filePath);
+  const formData = new FormData();
+  formData.append("chat_id", chatId);
+  formData.append("video", new Blob([fileData]), "video.mp4");
+
+  await fetch(`${API}/sendVideo`, { method: "POST", body: formData });
 }
 
 function extractUrl(text: string): string | null {
@@ -50,33 +32,59 @@ function extractUrl(text: string): string | null {
   return match ? match[0] : null;
 }
 
-serve(async (req: Request) => {
-  const { pathname } = new URL(req.url);
+// -------------------- Video Download --------------------
+async function downloadVideo(url: string): Promise<string | null> {
+  try {
+    const filePath = `video_${Date.now()}.mp4`;
+    const process = new Deno.Command("yt-dlp", {
+      args: ["-f", "mp4", "-o", filePath, url],
+      stdout: "piped",
+      stderr: "piped",
+    }).spawn();
 
-  if (pathname !== SECRET_PATH) {
-    return new Response("Not found", { status: 404 });
-  }
-
-  const update = await req.json();
-
-  if (update?.message?.text) {
-    const chatId = update.message.chat.id;
-    const text = update.message.text;
-    const url = extractUrl(text);
-
-    if (url && (url.includes("tiktok.com") || url.includes("instagram.com") || url.includes("youtube.com") || url.includes("youtu.be"))) {
-      await sendMessage(chatId, "Downloading your video, please wait...");
-
-      const videoUrl = await fetchDownloadUrl(url);
-      if (videoUrl) {
-        await sendVideo(chatId, videoUrl);
-      } else {
-        await sendMessage(chatId, "❌ Failed to fetch video. Try another link.");
-      }
-    } else if (text === "/start") {
-      await sendMessage(chatId, "👋 Send me a TikTok, Instagram, or YouTube link and I'll fetch the video for you.");
+    const { success } = await process.status;
+    if (success) {
+      return filePath;
+    } else {
+      console.error(new TextDecoder().decode(await process.stderrOutput()));
+      return null;
     }
+  } catch (err) {
+    console.error("yt-dlp error:", err);
+    return null;
+  }
+}
+
+// -------------------- HTTP Handler --------------------
+serve(async (req) => {
+  const { pathname } = new URL(req.url);
+  if (pathname !== SECRET_PATH) return new Response("Not found", { status: 404 });
+
+  try {
+    const update = await req.json();
+
+    if (update.message?.text) {
+      const chatId = String(update.message.chat.id);
+      const text = update.message.text;
+      const url = extractUrl(text);
+
+      if (url && (url.includes("tiktok.com") || url.includes("instagram.com") || url.includes("youtube.com") || url.includes("youtu.be"))) {
+        await sendMessage(chatId, "⬇️ Downloading your video, please wait...");
+
+        const filePath = await downloadVideo(url);
+        if (filePath) {
+          await sendVideoFile(chatId, filePath);
+          await Deno.remove(filePath); // cleanup
+        } else {
+          await sendMessage(chatId, "❌ Failed to download this video. Try another link.");
+        }
+      } else if (text === "/start") {
+        await sendMessage(chatId, "👋 Send me a TikTok, Instagram, or YouTube link and I'll fetch the video for you.");
+      }
+    }
+  } catch (err) {
+    console.error("Error handling update:", err);
   }
 
-  return new Response("OK");
+  return new Response("ok");
 });
