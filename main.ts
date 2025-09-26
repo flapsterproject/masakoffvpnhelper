@@ -1,10 +1,9 @@
 // main.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
-// -------------------- Telegram Setup --------------------
+// Telegram setup
 const TOKEN = Deno.env.get("BOT_TOKEN");
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
-
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
@@ -17,52 +16,60 @@ async function sendMessage(chatId: string, text: string) {
   });
 }
 
-async function sendVideoFile(chatId: string, filePath: string) {
-  const file = await Deno.readFile(filePath);
-  const formData = new FormData();
-  formData.append("chat_id", chatId);
-  formData.append("video", new Blob([file]), "video.mp4");
-
-  await fetch(`${API}/sendVideo`, { method: "POST", body: formData });
+async function sendVideo(chatId: string, videoUrl: string, caption = "") {
+  await fetch(`${API}/sendVideo`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      video: videoUrl,
+      caption,
+    }),
+  });
 }
 
-// -------------------- Utils --------------------
-function extractUrl(text: string): string | null {
-  const regex = /(https?:\/\/[^\s]+)/g;
-  const match = text.match(regex);
-  return match ? match[0] : null;
-}
-
-// -------------------- Video Download --------------------
-async function downloadVideo(url: string): Promise<string | null> {
+// -------------------- Video Download Helpers --------------------
+async function getDownloadLink(url: string): Promise<string | null> {
   try {
-    const filePath = `video_${Date.now()}.mp4`;
-
-    const cmd = new Deno.Command("yt-dlp", {
-      args: ["-f", "mp4", "-o", filePath, url],
-      stdout: "piped",
-      stderr: "piped",
-    });
-
-    const { code, stdout, stderr } = await cmd.output();
-
-    if (code === 0) {
-      console.log("yt-dlp success:", new TextDecoder().decode(stdout));
-      return filePath;
-    } else {
-      console.error("yt-dlp failed:", new TextDecoder().decode(stderr));
-      return null;
+    // TikTok & Instagram (using SnapSave API)
+    if (url.includes("tiktok.com") || url.includes("instagram.com")) {
+      const res = await fetch("https://api.snapsave.app/v1/info", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const data = await res.json();
+      return data?.data?.[0]?.url || null;
     }
-  } catch (err) {
-    console.error("yt-dlp execution error:", err);
+
+    // YouTube (example via RapidAPI – replace with your own key)
+    if (url.includes("youtube.com") || url.includes("youtu.be")) {
+      const res = await fetch(
+        "https://youtube-mp36.p.rapidapi.com/dl?id=" + url.split("v=")[1],
+        {
+          method: "GET",
+          headers: {
+            "X-RapidAPI-Key": Deno.env.get("RAPIDAPI_KEY")!,
+            "X-RapidAPI-Host": "youtube-mp36.p.rapidapi.com",
+          },
+        },
+      );
+      const data = await res.json();
+      return data?.link || null;
+    }
+
+    return null;
+  } catch (e) {
+    console.error("Downloader error:", e);
     return null;
   }
 }
 
 // -------------------- HTTP Handler --------------------
 serve(async (req) => {
-  const { pathname } = new URL(req.url);
-  if (pathname !== SECRET_PATH) return new Response("Not found", { status: 404 });
+  if (new URL(req.url).pathname !== SECRET_PATH) {
+    return new Response("Not Found", { status: 404 });
+  }
 
   try {
     const update = await req.json();
@@ -70,34 +77,28 @@ serve(async (req) => {
     if (update.message?.text) {
       const chatId = String(update.message.chat.id);
       const text = update.message.text;
-      const url = extractUrl(text);
 
       if (
-        url &&
-        (url.includes("tiktok.com") ||
-          url.includes("instagram.com") ||
-          url.includes("youtube.com") ||
-          url.includes("youtu.be"))
+        text.includes("tiktok.com") ||
+        text.includes("instagram.com") ||
+        text.includes("youtube.com") ||
+        text.includes("youtu.be")
       ) {
-        await sendMessage(chatId, "⬇️ Downloading your video...");
+        await sendMessage(chatId, "⏳ Downloading your video...");
 
-        const filePath = await downloadVideo(url);
-        if (filePath) {
-          await sendVideoFile(chatId, filePath);
-          await Deno.remove(filePath); // cleanup temp file
+        const videoUrl = await getDownloadLink(text);
+
+        if (videoUrl) {
+          await sendVideo(chatId, videoUrl, "Here is your video 🎥");
         } else {
-          await sendMessage(chatId, "❌ Failed to download this video. Check logs.");
+          await sendMessage(chatId, "❌ Failed to download this video.");
         }
-      } else if (text === "/start") {
-        await sendMessage(
-          chatId,
-          "👋 Send me a TikTok, Instagram, or YouTube link and I'll fetch the video for you."
-        );
       }
     }
   } catch (err) {
-    console.error("Update handling error:", err);
+    console.error("Update error:", err);
   }
 
   return new Response("ok");
 });
+
