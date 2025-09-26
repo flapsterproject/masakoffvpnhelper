@@ -84,9 +84,9 @@ serve(async (req) => {
         const filePath = await downloadVideo(url);
         if (filePath) {
           await sendVideoFile(chatId, filePath);
-          await Deno.remove(filePath); // cleanup
+          await Deno.remove(filePath); // cleanup temp file
         } else {
-          await sendMessage(chatId, "❌ Failed to download this video.");
+          await sendMessage(chatId, "❌ Failed to download this video. Check logs.");
         }
       } else if (text === "/start") {
         await sendMessage(
