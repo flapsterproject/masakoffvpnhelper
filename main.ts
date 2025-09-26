@@ -1,6 +1,6 @@
 // main.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import ytdl from "https://deno.land/x/ytdl_core@1.1.0/mod.ts";
+
 
 // -------------------- Config --------------------
 const TOKEN = Deno.env.get("BOT_TOKEN");
