@@ -6,7 +6,7 @@ const TOKEN = Deno.env.get("BOT_TOKEN");
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
 
 const API = `https://api.telegram.org/bot${TOKEN}`;
-const SECRET_PATH = "/masakoffvideobot";
+const SECRET_PATH = "/masakoffvpnhelper";
 
 // -------------------- Telegram Helpers --------------------
 async function sendMessage(chatId: string, text: string) {
