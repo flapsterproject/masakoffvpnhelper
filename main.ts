@@ -1,7 +1,6 @@
 // main.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
-
 // -------------------- Config --------------------
 const TOKEN = Deno.env.get("BOT_TOKEN");
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
@@ -40,34 +39,9 @@ async function sendVideo(chatId: string, videoUrl: string, caption = "") {
 }
 
 // -------------------- Video Download Helpers --------------------
-function extractYouTubeID(url: string): string | null {
-  const regExp =
-    /^.*(?:youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-  const match = url.match(regExp);
-  return match && match[1].length === 11 ? match[1] : null;
-}
-
-async function getYouTubeLink(url: string): Promise<string | null> {
-  const videoId = extractYouTubeID(url);
-  if (!videoId) return null;
-
-  try {
-    const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`);
-    // Choose highest quality mp4 format
-    const format = info.formats
-      .filter(f => f.mimeType?.includes("video/mp4"))
-      .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0))[0];
-
-    return format?.url || null;
-  } catch (e) {
-    console.error("YouTube download error:", e);
-    return null;
-  }
-}
-
 async function getDownloadLink(url: string): Promise<string | null> {
   try {
-    // TikTok & Instagram via SnapSave
+    // TikTok & Instagram using SnapSave API
     if (url.includes("tiktok.com") || url.includes("instagram.com")) {
       const res = await fetch("https://api.snapsave.app/v1/info", {
         method: "POST",
@@ -78,9 +52,11 @@ async function getDownloadLink(url: string): Promise<string | null> {
       return data?.data?.[0]?.url || null;
     }
 
-    // YouTube
+    // YouTube using ytdl API (or replace with another service if needed)
     if (url.includes("youtube.com") || url.includes("youtu.be")) {
-      return await getYouTubeLink(url);
+      const res = await fetch(`https://youtube.googleapis.com/youtube/v3/videos?id=${url}&key=YOUR_YOUTUBE_API_KEY`);
+      // Here you would extract the download URL from YouTube APIs or a service
+      return null; // Placeholder
     }
 
     return null;
@@ -136,6 +112,7 @@ serve(async (req) => {
 
   return new Response("ok");
 });
+
 
 
 
