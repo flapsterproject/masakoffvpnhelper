@@ -1,117 +1,72 @@
+// main.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { exec } from "https://deno.land/x/exec/mod.ts";
 
-const TOKEN = Deno.env.get("BOT_TOKEN");
-if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
+const TOKEN = Deno.env.get("BOT_TOKEN")!;
+const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
+const TARGET_CHANNEL = "@MasakoffVpns";
+const MESSAGE_TEXT = "👆Yokarky koda 2je like basyň ♥️✅️";
 
-const API = `https://api.telegram.org/bot${TOKEN}`;
-const SECRET_PATH = "/masakoffvpnhelper";
+// Keep track of last message
+let lastMessageId: number | null = null;
 
-// -------------------- Telegram Helpers --------------------
-async function sendMessageWithButtons(chatId: string, text: string, buttons: any) {
-  await fetch(`${API}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      reply_markup: { inline_keyboard: buttons },
-    }),
-  });
-}
-
-async function sendFile(chatId: string, filePath: string, type: "video" | "audio", caption = "") {
+// Function to send message
+async function sendMessage(): Promise<number | null> {
   try {
-    const formData = new FormData();
-    formData.append("chat_id", chatId);
-    formData.append("caption", caption);
-
-    const file = await Deno.readFile(filePath);
-    formData.append(type, new Blob([file]), type === "video" ? "video.mp4" : "audio.mp3");
-
-    await fetch(`${API}/send${type === "video" ? "Video" : "Audio"}`, {
+    const resp = await fetch(`${TELEGRAM_API}/sendMessage`, {
       method: "POST",
-      body: formData,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: TARGET_CHANNEL,
+        text: MESSAGE_TEXT,
+        parse_mode: "HTML",
+      }),
     });
-  } finally {
-    // Always remove file after sending
-    try { await Deno.remove(filePath); } catch (_) {}
+
+    const data = await resp.json();
+    if (!data.ok) {
+      console.error("Failed to send message:", data);
+      return null;
+    }
+    return data.result.message_id;
+  } catch (e) {
+    console.error("Error sending message:", e);
+    return null;
   }
 }
 
-// -------------------- Video/Audio Download --------------------
-async function downloadMedia(url: string, format: "720p" | "1080p" | "audio") {
-  const filename = format === "audio" ? "audio.mp3" : "video.mp4";
-  let ytFormat = "";
-
-  if (format === "720p") ytFormat = "best[height<=720]";
-  else if (format === "1080p") ytFormat = "best[height<=1080]";
-  else if (format === "audio") ytFormat = "bestaudio";
-
-  // Download using yt-dlp
-  await exec(`yt-dlp -f "${ytFormat}" -o "${filename}" "${url}"`);
-  return filename;
-}
-
-// -------------------- HTTP Handler --------------------
-serve(async (req) => {
-  const urlPath = new URL(req.url).pathname;
-  if (urlPath !== SECRET_PATH) return new Response("Not Found", { status: 404 });
-
-  let update;
+// Function to delete message
+async function deleteMessage(messageId: number) {
   try {
-    update = await req.json();
-  } catch {
-    return new Response("Invalid JSON", { status: 400 });
+    await fetch(`${TELEGRAM_API}/deleteMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: TARGET_CHANNEL,
+        message_id: messageId,
+      }),
+    });
+  } catch (e) {
+    console.error("Error deleting message:", e);
   }
+}
 
-  // Handle text messages
-  const chatId = String(update.message?.chat?.id);
-  const text = update.message?.text?.trim();
+// Loop forever: send -> wait 5 min -> delete -> repeat
+async function startLoop() {
+  while (true) {
+    const msgId = await sendMessage();
+    if (msgId) lastMessageId = msgId;
 
-  if (chatId && text) {
-    if (text.includes("tiktok.com") || text.includes("instagram.com") || text.includes("youtube.com") || text.includes("youtu.be")) {
-      const buttons = [
-        [
-          { text: "🎬 720p", callback_data: `720p|${text}` },
-          { text: "🎬 1080p", callback_data: `1080p|${text}` },
-        ],
-        [{ text: "🎵 Audio", callback_data: `audio|${text}` }],
-      ];
+    // Wait 5 minutes
+    await new Promise((res) => setTimeout(res, 5 * 60 * 1000));
 
-      await sendMessageWithButtons(chatId, "Select your format:", buttons);
-    } else {
-      await fetch(`${API}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, text: "Send a TikTok, Instagram, or YouTube link." }),
-      });
-    }
+    if (lastMessageId) await deleteMessage(lastMessageId);
   }
+}
 
-  // Handle button presses (callback queries)
-  if (update.callback_query) {
-    const [type, url] = update.callback_query.data.split("|");
-    const chatId = update.callback_query.message.chat.id;
+// Start the loop immediately
+startLoop();
 
-    try {
-      if (type === "audio") {
-        const filePath = await downloadMedia(url, "audio");
-        await sendFile(chatId, filePath, "audio", "Here is your audio 🎵");
-      } else {
-        const filePath = await downloadMedia(url, type as "720p" | "1080p");
-        await sendFile(chatId, filePath, "video", `Here is your ${type} video 🎬`);
-      }
-    } catch (err) {
-      console.error("Download/send error:", err);
-      await fetch(`${API}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, text: "❌ Failed to download or send the media." }),
-      });
-    }
-  }
+// Optional: basic HTTP server for health check
+serve((_req: Request) => new Response("Bot is running"));
 
-  return new Response("ok");
-});
 
