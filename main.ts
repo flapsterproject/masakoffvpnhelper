@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-
+import { exec } from "https://deno.land/x/exec/mod.ts";
 
 const TOKEN = Deno.env.get("BOT_TOKEN");
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
@@ -20,40 +20,27 @@ async function sendMessageWithButtons(chatId: string, text: string, buttons: any
   });
 }
 
-async function sendVideoFile(chatId: string, filePath: string, caption = "") {
-  const formData = new FormData();
-  formData.append("chat_id", chatId);
-  formData.append("caption", caption);
-  const file = await Deno.readFile(filePath);
-  formData.append("video", new Blob([file]), "video.mp4");
+async function sendFile(chatId: string, filePath: string, type: "video" | "audio", caption = "") {
+  try {
+    const formData = new FormData();
+    formData.append("chat_id", chatId);
+    formData.append("caption", caption);
 
-  await fetch(`${API}/sendVideo`, {
-    method: "POST",
-    body: formData,
-  });
+    const file = await Deno.readFile(filePath);
+    formData.append(type, new Blob([file]), type === "video" ? "video.mp4" : "audio.mp3");
 
-  // Delete file after sending
-  await Deno.remove(filePath);
+    await fetch(`${API}/send${type === "video" ? "Video" : "Audio"}`, {
+      method: "POST",
+      body: formData,
+    });
+  } finally {
+    // Always remove file after sending
+    try { await Deno.remove(filePath); } catch (_) {}
+  }
 }
 
-async function sendAudioFile(chatId: string, filePath: string, caption = "") {
-  const formData = new FormData();
-  formData.append("chat_id", chatId);
-  formData.append("caption", caption);
-  const file = await Deno.readFile(filePath);
-  formData.append("audio", new Blob([file]), "audio.mp3");
-
-  await fetch(`${API}/sendAudio`, {
-    method: "POST",
-    body: formData,
-  });
-
-  // Delete file after sending
-  await Deno.remove(filePath);
-}
-
-// -------------------- Video Download Helper --------------------
-async function downloadVideo(url: string, format: "720p" | "1080p" | "audio") {
+// -------------------- Video/Audio Download --------------------
+async function downloadMedia(url: string, format: "720p" | "1080p" | "audio") {
   const filename = format === "audio" ? "audio.mp3" : "video.mp4";
   let ytFormat = "";
 
@@ -61,7 +48,7 @@ async function downloadVideo(url: string, format: "720p" | "1080p" | "audio") {
   else if (format === "1080p") ytFormat = "best[height<=1080]";
   else if (format === "audio") ytFormat = "bestaudio";
 
-  // Execute yt-dlp
+  // Download using yt-dlp
   await exec(`yt-dlp -f "${ytFormat}" -o "${filename}" "${url}"`);
   return filename;
 }
@@ -71,8 +58,14 @@ serve(async (req) => {
   const urlPath = new URL(req.url).pathname;
   if (urlPath !== SECRET_PATH) return new Response("Not Found", { status: 404 });
 
-  const update = await req.json();
+  let update;
+  try {
+    update = await req.json();
+  } catch {
+    return new Response("Invalid JSON", { status: 400 });
+  }
 
+  // Handle text messages
   const chatId = String(update.message?.chat?.id);
   const text = update.message?.text?.trim();
 
@@ -96,28 +89,29 @@ serve(async (req) => {
     }
   }
 
-  // Handle button presses
+  // Handle button presses (callback queries)
   if (update.callback_query) {
     const [type, url] = update.callback_query.data.split("|");
     const chatId = update.callback_query.message.chat.id;
 
     try {
       if (type === "audio") {
-        const filePath = await downloadVideo(url, "audio");
-        await sendAudioFile(chatId, filePath, "Here is your audio 🎵");
+        const filePath = await downloadMedia(url, "audio");
+        await sendFile(chatId, filePath, "audio", "Here is your audio 🎵");
       } else {
-        const filePath = await downloadVideo(url, type as "720p" | "1080p");
-        await sendVideoFile(chatId, filePath, `Here is your ${type} video 🎬`);
+        const filePath = await downloadMedia(url, type as "720p" | "1080p");
+        await sendFile(chatId, filePath, "video", `Here is your ${type} video 🎬`);
       }
     } catch (err) {
-      console.error(err);
+      console.error("Download/send error:", err);
       await fetch(`${API}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, text: "Failed to download the video. ❌" }),
+        body: JSON.stringify({ chat_id: chatId, text: "❌ Failed to download or send the media." }),
       });
     }
   }
 
   return new Response("ok");
 });
+
