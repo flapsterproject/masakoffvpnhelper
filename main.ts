@@ -1,11 +1,10 @@
 // main.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import ytdl from "https://deno.land/x/ytdl_core@1.1.0/mod.ts";
 
 // -------------------- Config --------------------
 const TOKEN = Deno.env.get("BOT_TOKEN");
-const RAPIDAPI_KEY = Deno.env.get("RAPIDAPI_KEY");
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
-if (!RAPIDAPI_KEY) throw new Error("RAPIDAPI_KEY env var is required");
 
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
@@ -53,20 +52,15 @@ async function getYouTubeLink(url: string): Promise<string | null> {
   if (!videoId) return null;
 
   try {
-    const res = await fetch(
-      `https://youtube-mp36.p.rapidapi.com/dl?id=${videoId}`,
-      {
-        method: "GET",
-        headers: {
-          "X-RapidAPI-Key": RAPIDAPI_KEY!,
-          "X-RapidAPI-Host": "youtube-mp36.p.rapidapi.com",
-        },
-      },
-    );
-    const data = await res.json();
-    return data?.link || null;
+    const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`);
+    // Choose highest quality mp4 format
+    const format = info.formats
+      .filter(f => f.mimeType?.includes("video/mp4"))
+      .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0))[0];
+
+    return format?.url || null;
   } catch (e) {
-    console.error("YouTube API error:", e);
+    console.error("YouTube download error:", e);
     return null;
   }
 }
@@ -142,5 +136,6 @@ serve(async (req) => {
 
   return new Response("ok");
 });
+
 
 
