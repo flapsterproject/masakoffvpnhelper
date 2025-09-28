@@ -1,416 +1,593 @@
-// sponsor_bot_masakoff.ts
-// Deno single-file Telegram webhook bot — Turkmen (Salam VPN sponsor bot)
-// ENV required: BOT_TOKEN
-// Optional ENV: ADMIN_ID (başlangyç admin Telegram numeric ID)
-// Webhook path default: /masakoff
-
+// main.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
+const kv = await Deno.openKv();
+
 const TOKEN = Deno.env.get("BOT_TOKEN");
-if (!TOKEN) throw new Error("BOT_TOKEN çevre üýtgeji gerekli");
-const SECRET_PATH = "/masakoffvpnhelper";
+if (!TOKEN) {
+  console.error("BOT_TOKEN ýok. Öňünden gurun.");
+  Deno.exit(1);
+}
+const SECRET_PATH = "/masakoffvpnhelper"; // üýtgetseňiz ýazyň
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 
-// --- file storage ---
-const DB_FILE = "db.json";        // { admins: number[], channels: string[], state: Record<chatId, {action, payload}> }
-const ADLIST_FILE = "adlist.txt"; // newline: channel username or chat_id
-const VPN_FILE = "vpn_codes.txt"; // newline: one code per line
-
-// --- in-memory DB ---
-let DB: { admins: number[]; channels: string[]; state: Record<string, any> } = { admins: [], channels: [], state: {} };
-
-// --- helpers for fs ---
-async function safeRead(path: string) {
-  try { return await Deno.readTextFile(path); } catch { return ""; }
+// default başlangyç — ýöne admin panelinden dolandyrmak mümkin
+async function getChannels(): Promise<string[]> {
+  const res = await kv.get<string[]>("channels");
+  return res.value ?? [];
 }
-async function safeWrite(path: string, content: string) {
-  await Deno.writeTextFile(path, content);
-}
-async function loadDb() {
-  try {
-    const raw = await Deno.readTextFile(DB_FILE);
-    DB = JSON.parse(raw);
-    DB.admins = DB.admins || [];
-    DB.channels = DB.channels || [];
-    DB.state = DB.state || {};
-  } catch {
-    const initial = Deno.env.get("ADMIN_ID");
-    DB = { admins: initial ? [Number(initial)] : [], channels: [], state: {} };
-    await saveDb();
-  }
-}
-async function saveDb() { await Deno.writeTextFile(DB_FILE, JSON.stringify(DB, null, 2)); }
-
-// --- small utils ---
-function mkInline(rows: any[][]) { return { reply_markup: { inline_keyboard: rows } }; }
-function isAdmin(uid?: number) { if (!uid) return false; return DB.admins.includes(uid); }
-
-// --- Turkmen texts ---
-const TXT = {
-  start_no_channels: "Salam! Häzir zerur kanallar görkezilmändir. Administrator bilen habarlaşyň.",
-  start_needed: (chs: string[]) => `Salam! VPN kody almak üçin aşakdaky kanallara agza bolmaly:\n${chs.length ? chs.map((c,i)=>`${i+1}. ${c}`).join("\n") : "(Hiç biri)"}\n\nAgza bolan soň \"✅ Men ähli kanallara agza boldum\" düwmesine basyň.`,
-  not_admin: "Siz admin däl. Admin paneline girmek üçin admin ID-ni /admin ýazyp soňra ID-ni giriziň.",
-  admin_panel_title: "<< Admin Panel >>",
-  choose_action: "Aşakdaky düwmelerden birini saýlaň:",
-  added_channel: (c:string) => `Kanaly goşdum: ${c}`,
-  removed_channel: (c:string) => `Kanaly aýyrdym: ${c}`,
-  list_channels: (chs:string[]) => `Zerur kanallar:\n${chs.length ? chs.map((c,i)=>`${i+1}. ${c}`).join("\n") : "(Hiç biri)"}`,
-  got_vpn_code: "VPN kody üstünlikli goşuldy.",
-  uploaded_codes_file: "VPN kodlary faýldan üstünlikli goşuldy.",
-  added_admin: (id:number) => `Täze admin goşuldy: ${id}`,
-  prompt_forward_for_broadcast: "Ugratmak isleýän habaryňyzy şu chat-a forward ediň.",
-  broadcast_sent: "Ugratma üstünlikli edildi.",
-  ask_channel_name: "Kanal adyny ýa-da ID-ni ýazyň (meselem: @channel ýa-da -10012345).",
-  ask_remove_channel: "Aýyrjak kanalyňyzy ýazyň.",
-  ask_admin_id: "Admin ID-ni ýazyň (san).",
-  ask_adlist_file: "Adlist faýlyny şu chat-a document görnüşinde ugradyn.",
-  ask_vpn_file: "VPN kodlarynyň faýlyny şu chat-a document görnüşinde ugradyn ýa-da /addvpn KOD görnüşinde goşuň.",
-  i_joined_ack: "Sag boluň! Agza bolup, kody almak üçin işleşýärin...",
-  no_vpn_codes: "Hozir VPN kodlary ýok. Administrator bilen habarlaşyň.",
-  vpn_code_sent: (code:string) => `Siziň VPN koduňyz:\n<code>${code}</code>\nUlanmaga taýýar!`,
-  file_not_found: "Faýl tapylmady ýa-da okalyp bilmedi.",
-  unknown_action: "Näbelli operasiýa. Admin panelinden iş başlaň.",
-};
-
-// --- admin inline keyboard ---
-function adminKeyboard() {
-  return mkInline([
-    [{ text: "📣 Ryssylka (Forward)", callback_data: "forward_broadcast" }, { text: "✉️ Ryssylka (Text)", callback_data: "text_broadcast" }],
-    [{ text: "➕ Kanal goş", callback_data: "add_channel" }, { text: "➖ Kanal aýyr", callback_data: "remove_channel" }],
-    [{ text: "📜 Kanal sanawy", callback_data: "list_channels" }],
-    [{ text: "🗂 Adlist (faýl)", callback_data: "manage_adlist" }, { text: "🔐 VPN kodlaryny faýl bilen goş", callback_data: "add_vpn_file" }],
-    [{ text: "➕ Admin goş", callback_data: "add_admin" }]
-  ]);
+async function setChannels(channels: string[]) {
+  await kv.set("channels", channels);
 }
 
-// --- Telegram helpers ---
+async function getAdmins(): Promise<number[]> {
+  const res = await kv.get<number[]>("admins");
+  return res.value ?? [];
+}
+async function setAdmins(admins: number[]) {
+  await kv.set("admins", admins);
+}
+
+async function getAdList(): Promise<string[]> {
+  const res = await kv.get<string[]>("adlist");
+  return res.value ?? [];
+}
+async function setAdList(list: string[]) {
+  await kv.set("adlist", list);
+}
+
+async function getVpnCodes(): Promise<string[]> {
+  const res = await kv.get<string[]>("vpn_codes");
+  return res.value ?? [];
+}
+async function setVpnCodes(codes: string[]) {
+  await kv.set("vpn_codes", codes);
+}
+
+// Telegram helpers
 async function api(method: string, body: any) {
-  await fetch(`${TELEGRAM_API}/${method}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-}
-async function sendMessage(chat_id:number|string, text:string, extra: any = {}) { await api("sendMessage", { chat_id, text, parse_mode: "HTML", ...extra }); }
-async function editMessageText(chat_id:number|string, message_id:number, text:string, extra: any = {}) { await api("editMessageText", { chat_id, message_id, text, parse_mode: "HTML", ...extra }); }
-async function answerCallbackQuery(callback_query_id:string, text?:string) { const body:any = { callback_query_id }; if (text) body.text = text; await api("answerCallbackQuery", body); }
-async function forwardMessage(toChat:number|string, fromChat:number|string, messageId:number) { await api("forwardMessage", { chat_id: toChat, from_chat_id: fromChat, message_id: messageId }); }
-async function getFilePath(file_id:string) { try { const r = await (await fetch(`${TELEGRAM_API}/getFile?file_id=${file_id}`)).json(); if (!r.ok) return null; return r.result.file_path as string; } catch { return null; } }
-async function downloadFile(filePath:string) { try { const url = `https://api.telegram.org/file/bot${TOKEN}/${filePath}`; const r = await fetch(url); if (!r.ok) return null; return await r.text(); } catch { return null; } }
-
-// --- VPN code helpers ---
-async function popVpnCode(): Promise<string|null> {
-  const raw = await safeRead(VPN_FILE);
-  const lines = raw.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-  if (!lines.length) return null;
-  const code = lines.shift()!;
-  await safeWrite(VPN_FILE, lines.join("\n"));
-  return code;
-}
-async function appendVpnText(text:string) {
-  const cur = await safeRead(VPN_FILE);
-  const merged = (cur && !cur.endsWith("\n") ? cur + "\n" : cur) + text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean).join("\n") + "\n";
-  await safeWrite(VPN_FILE, merged);
+  const res = await fetch(`${TELEGRAM_API}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
 }
 
-// --- Adlist helpers ---
-async function getAdlist() { const raw = await safeRead(ADLIST_FILE); return raw.split(/\r?\n/).map(s=>s.trim()).filter(Boolean); }
-async function setAdlistFromText(text:string) { await safeWrite(ADLIST_FILE, text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean).join("\n") + "\n"); }
+async function sendMessage(chat_id: number | string, text: string, reply_markup?: any) {
+  return api("sendMessage", { chat_id, text, parse_mode: "HTML", reply_markup });
+}
 
-// --- start up load DB ---
-await loadDb();
+async function editMessageText(chat_id: number | string, message_id: number, text: string, reply_markup?: any) {
+  return api("editMessageText", { chat_id, message_id, text, parse_mode: "HTML", reply_markup });
+}
 
-// --- webhook server ---
+async function answerCallback(callback_query_id: string, text?: string, show_alert = false) {
+  return api("answerCallbackQuery", { callback_query_id, text, show_alert });
+}
+
+// subscription kontrol
+async function isSubscribed(userId: number) {
+  const channels = await getChannels();
+  for (const channel of channels) {
+    try {
+      const res = await fetch(`${TELEGRAM_API}/getChatMember?chat_id=${encodeURIComponent(channel)}&user_id=${userId}`);
+      const data = await res.json();
+      if (!data.ok) return false;
+      const status = data.result.status;
+      if (status === "left" || status === "kicked") return false;
+    } catch (e) {
+      console.error("getChatMember xəta:", e);
+      return false;
+    }
+  }
+  return true;
+}
+
+// inline keyboards builders (Türkmençe)
+function startKeyboard(channels: string[]) {
+  const rows: any[] = [
+    [{ text: "Abunalyk barla 📌", callback_data: "check_sub" }],
+  ];
+  for (const c of channels) {
+    const name = c.startsWith("@") ? c : `@${c}`;
+    rows.push([{ text: `Gatnaş ${name}`, url: `https://t.me/${name.replace("@", "")}` }]);
+  }
+  return { inline_keyboard: rows };
+}
+
+function adminPanelKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "Kanal goş", callback_data: "admin_add_channel" }, { text: "Kanal aýyr", callback_data: "admin_remove_channel" }],
+      [{ text: "Kanal sanawy", callback_data: "admin_list_channels" }],
+      [{ text: "Adlist goş (faýl)", callback_data: "admin_upload_adlist" }, { text: "Adlist gör", callback_data: "admin_show_adlist" }],
+      [{ text: "VPN kod goş (tekil)", callback_data: "admin_add_vpn" }, { text: "VPN faýl bilen", callback_data: "admin_upload_vpn_file" }],
+      [{ text: "Habar iber (tekil)", callback_data: "admin_send_single" }, { text: "Habar iber (toplu)", callback_data: "admin_send_bulk" }],
+      [{ text: "Admin goş", callback_data: "admin_add_admin" }, { text: "Admin aýyr", callback_data: "admin_remove_admin" }],
+      [{ text: "Çykyş", callback_data: "admin_exit" }]
+    ]
+  };
+}
+
+// admin barlag
+async function ensureAdmin(userId: number) {
+  const admins = await getAdmins();
+  return admins.includes(userId);
+}
+
+// get file from Telegram and return text content (assumes small text files like .txt)
+async function fetchTelegramFile(file_id: string): Promise<Uint8Array | null> {
+  const fileRes = await api("getFile", { file_id });
+  if (!fileRes.ok) return null;
+  const path = fileRes.result.file_path;
+  const url = `https://api.telegram.org/file/bot${TOKEN}/${path}`;
+  const r = await fetch(url);
+  const data = new Uint8Array(await r.arrayBuffer());
+  return data;
+}
+
+// parse simple newline separated text into array trimming empties
+function parseLines(buf: Uint8Array) {
+  const text = new TextDecoder().decode(buf);
+  return text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+}
+
+// primary server
 serve(async (req: Request) => {
-  const url = new URL(req.url);
-  if (url.pathname !== SECRET_PATH) return new Response("ok");
-  if (req.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
-
-  let update: any;
-  try { update = await req.json(); } catch { return new Response("ok"); }
-
-  const msg = update.message;
-  const cbq = update.callback_query;
-
-  // --- callback query handling (admin inline) ---
-  if (cbq) {
-    const fromId = cbq.from?.id;
-    const chatId = cbq.message?.chat?.id;
-    const messageId = cbq.message?.message_id;
-    const data = cbq.data;
-
-    // only admins can use admin inline buttons — but allow admin login flow via /admin (text)
-    if (!isAdmin(fromId)) {
-      await answerCallbackQuery(cbq.id, TXT.not_admin);
-      return new Response("ok");
+  try {
+    const { pathname } = new URL(req.url);
+    if (pathname !== SECRET_PATH) {
+      return new Response("Bot is running.", { status: 200 });
     }
 
-    if (data === "list_channels") {
-      await editMessageText(chatId, messageId, `${TXT.admin_panel_title}\n\n${TXT.list_channels(DB.channels)}`, adminKeyboard());
-      await answerCallbackQuery(cbq.id);
-      return new Response("ok");
-    }
-    if (data === "add_channel") {
-      DB.state[String(chatId)] = { action: "awaiting_channel_add" }; await saveDb();
-      await answerCallbackQuery(cbq.id, TXT.ask_channel_name);
-      return new Response("ok");
-    }
-    if (data === "remove_channel") {
-      DB.state[String(chatId)] = { action: "awaiting_channel_remove" }; await saveDb();
-      await answerCallbackQuery(cbq.id, TXT.ask_remove_channel);
-      return new Response("ok");
-    }
-    if (data === "text_broadcast") {
-      DB.state[String(chatId)] = { action: "awaiting_broadcast_text" }; await saveDb();
-      await answerCallbackQuery(cbq.id, "Indi ugradyljak tekstini şu chat-a ýazyň. (Eger belli ID-lere ugratmak isleseňiz, ID-leri vergül bilen ayyryp ýazyň: -100123,... )");
-      return new Response("ok");
-    }
-    if (data === "forward_broadcast") {
-      DB.state[String(chatId)] = { action: "awaiting_broadcast_forward" }; await saveDb();
-      await answerCallbackQuery(cbq.id, TXT.prompt_forward_for_broadcast);
-      return new Response("ok");
-    }
-    if (data === "manage_adlist") {
-      DB.state[String(chatId)] = { action: "awaiting_adlist_file" }; await saveDb();
-      await answerCallbackQuery(cbq.id, TXT.ask_adlist_file);
-      return new Response("ok");
-    }
-    if (data === "add_vpn_file") {
-      DB.state[String(chatId)] = { action: "awaiting_vpn_file" }; await saveDb();
-      await answerCallbackQuery(cbq.id, TXT.ask_vpn_file);
-      return new Response("ok");
-    }
-    if (data === "add_admin") {
-      DB.state[String(chatId)] = { action: "awaiting_new_admin" }; await saveDb();
-      await answerCallbackQuery(cbq.id, TXT.ask_admin_id);
-      return new Response("ok");
+    if (req.method !== "POST") {
+      return new Response("Method Not Allowed", { status: 405 });
     }
 
-    await answerCallbackQuery(cbq.id);
-    return new Response("ok");
-  }
+    const update = await req.json();
+    const message = update.message;
+    const callbackQuery = update.callback_query;
+    const chatId = message?.chat?.id || callbackQuery?.message?.chat?.id;
+    const text = message?.text;
+    const data = callbackQuery?.data;
+    const messageId = callbackQuery?.message?.message_id;
+    const from = message?.from ?? callbackQuery?.from;
+    const userId = from?.id;
 
-  // --- message handling ---
-  if (!msg) return new Response("ok");
-  const chatId = msg.chat?.id;
-  const messageId = msg.message_id;
-  const fromId = msg.from?.id;
-  const text = (msg.text || msg.caption || "").trim();
-  const doc = msg.document;
+    if (!chatId || !userId) return new Response("No chat ID or user", { status: 200 });
 
-  if (!chatId) return new Response("ok");
-
-  // /start
-  if (text.toLowerCase().startsWith("/start")) {
-    if (!DB.channels.length) {
-      await sendMessage(chatId, TXT.start_no_channels);
-      return new Response("ok");
+    // Handle /start
+    if (text?.startsWith("/start")) {
+      const channels = await getChannels();
+      const subscribed = await isSubscribed(userId);
+      if (subscribed) {
+        await sendMessage(chatId, "🎉 Siz zerur kanallara agza bolduňyz! Botdan ulanyp bilersiňiz.");
+      } else {
+        await sendMessage(chatId, "⚠️ VPN kody almak üçin aşakdaky kanallara agza bolmaly. Agza bolan soň 'Abunalyk barla' düwmesine basyň.",
+          startKeyboard(channels));
+      }
+      return new Response("OK", { status: 200 });
     }
-    const rows = DB.channels.map(c => [{ text: c, url: `https://t.me/${c.replace(/^@/, "")}` }]);
-    rows.push([{ text: "✅ Men ähli kanallara agza boldum", callback_data: "i_joined" }]);
-    await sendMessage(chatId, TXT.start_needed(DB.channels), mkInline(rows));
-    return new Response("ok");
-  }
 
-  // /admin flow: if sender already admin -> show panel; if not, set awaiting_admin_login state and ask for ID
-  if (text.toLowerCase().startsWith("/admin")) {
-    if (isAdmin(fromId)) {
-      await sendMessage(chatId, `${TXT.admin_panel_title}\n\n${TXT.choose_action}`, adminKeyboard());
-      return new Response("ok");
-    } else {
-      DB.state[String(chatId)] = { action: "awaiting_admin_login" }; await saveDb();
-      await sendMessage(chatId, "Admin ID-ni ýazyň (san)."); // prompt for numeric admin id
-      return new Response("ok");
+    // Handle /admin <admin_secret_id> — ýa-da diňe /admin ulanyň we admin bilen deňleşdiriň
+    if (text?.startsWith("/admin")) {
+      // `/admin` ýa-da `/admin 12345` ýaly
+      const parts = text.split(" ").filter(Boolean);
+      const admins = await getAdmins();
+
+      // If no admins yet, första admin = sender
+      if (admins.length === 0) {
+        await setAdmins([userId]);
+        await sendMessage(chatId, "✅ Siz ilkinji admin hökmünde belleňiz. Admin panel açyldy.", adminPanelKeyboard());
+        return new Response("OK", { status: 200 });
+      }
+
+      // check sender is admin
+      if (!(await ensureAdmin(userId))) {
+        await sendMessage(chatId, "❌ Bu funksiýany ulanmak üçin admin bolmaly. Admin bolmasaňyz, adminiňiz bilen habarlaşyň.");
+        return new Response("OK", { status: 200 });
+      }
+
+      // show admin panel
+      await sendMessage(chatId, "🛠️ Admin panel\nAşakdaky düwmeler arkaly kanallary, adlistleri we VPN kodlaryny dolandyrmak bolýar.", adminPanelKeyboard());
+      return new Response("OK", { status: 200 });
     }
-  }
 
-  // --- handle pending states (only admin-related states or login) ---
-  const state = DB.state[String(chatId)] || null;
+    // Handle callback queries (admin panel actions or subscription check)
+    if (data) {
+      // subscription check (from /start)
+      if (data === "check_sub" && messageId) {
+        const subscribed = await isSubscribed(userId);
+        const textToSend = subscribed
+          ? "🎉 Siz ähli zerur kanallara abunasyňiz! VPN kody üçin admin bilen habarlaşyň ýa-da botdan kody talap ediň."
+          : "⚠️ Siz ähli zerur kanallara abuna däl. Haýyş edýäris kanallara goşulyň we soň 'Abunalyk barla' düwmesine basyň.";
+        await editMessageText(chatId, messageId, textToSend, subscribed ? undefined : startKeyboard(await getChannels()));
+        await answerCallback(callbackQuery.id);
+        return new Response("OK", { status: 200 });
+      }
 
-  if (state) {
-    const action = state.action;
-
-    // admin login attempt (user provided admin ID)
-    if (action === "awaiting_admin_login") {
-      if (text && /^[0-9]+$/.test(text)) {
-        const id = Number(text);
-        if (DB.admins.includes(id)) {
-          // mark this chat's user as admin? we must check sender id equals provided id OR we allow if they proved knowledge
-          // safer: require that text equals their own Telegram id. But user requested "admin id ile girsin" — allow matching any existing admin id
-          DB.state[String(chatId)] = null; await saveDb();
-          // if provided id equals their own id, add them to admins (they are owner) - optional: here we allow only if they are the same user
-          if (fromId === id && !DB.admins.includes(id)) { DB.admins.push(id); await saveDb(); }
-          // show admin panel
-          await sendMessage(chatId, `${TXT.admin_panel_title}\n\n${TXT.choose_action}`, adminKeyboard());
-        } else {
-          await sendMessage(chatId, "Nädogry admin ID ýa-da admin ýok. Administrator bilen habarlaşyň.");
+      // Admin actions
+      if (data.startsWith("admin_")) {
+        if (!(await ensureAdmin(userId))) {
+          await answerCallback(callbackQuery.id, "Siz admin däl", true);
+          return new Response("OK", { status: 200 });
         }
-      } else {
-        await sendMessage(chatId, "Iltimos san görnüşinde ID yazyn.");
-      }
-      return new Response("ok");
-    }
 
-    // awaiting_channel_add
-    if (action === "awaiting_channel_add" && isAdmin(fromId)) {
-      if (text) {
-        const ch = text.split(/\s+/)[0].trim();
-        if (!DB.channels.includes(ch)) DB.channels.push(ch);
-        await saveDb();
-        DB.state[String(chatId)] = null; await saveDb();
-        await sendMessage(chatId, TXT.added_channel(ch));
-      } else {
-        await sendMessage(chatId, TXT.unknown_action);
-      }
-      return new Response("ok");
-    }
+        switch (data) {
+          case "admin_add_channel":
+            await answerCallback(callbackQuery.id);
+            await sendMessage(chatId, "Kanaladyň adyny ýazyň (meselem: @MyChannel ýa-da MyChannel).");
+            // We expect next message from admin to contain channel name — store state
+            await kv.set(`state:${userId}`, { action: "add_channel" });
+            break;
 
-    // awaiting_channel_remove
-    if (action === "awaiting_channel_remove" && isAdmin(fromId)) {
-      if (text) {
-        const ch = text.split(/\s+/)[0].trim();
-        DB.channels = DB.channels.filter(c => c !== ch);
-        await saveDb();
-        DB.state[String(chatId)] = null; await saveDb();
-        await sendMessage(chatId, TXT.removed_channel(ch));
-      } else {
-        await sendMessage(chatId, TXT.unknown_action);
-      }
-      return new Response("ok");
-    }
+          case "admin_remove_channel":
+            await answerCallback(callbackQuery.id);
+            await sendMessage(chatId, "Aýrylýan kanalyň adyny ýazyň (meselem: @MyChannel).");
+            await kv.set(`state:${userId}`, { action: "remove_channel" });
+            break;
 
-    // awaiting_broadcast_text
-    if (action === "awaiting_broadcast_text" && isAdmin(fromId)) {
-      if (!text) { await sendMessage(chatId, "Iltimos tekst ugradyn."); return new Response("ok"); }
-      // if admin provides comma-separated IDs at start like: "-100123,-100456|message" or provide only IDs line, we support two modes:
-      // Mode A: if text contains '|' we split ids|message -> ids comma separated
-      let targets: string[] = [];
-      let payload = text;
-      if (text.includes("|")) {
-        const [idsPart, ...rest] = text.split("|");
-        const ids = idsPart.split(",").map(s=>s.trim()).filter(Boolean);
-        targets = ids;
-        payload = rest.join("|").trim();
-      } else {
-        // otherwise use adlist
-        targets = await getAdlist();
-      }
-      for (const t of targets) {
-        try { await sendMessage(t, payload); } catch (_) {}
-      }
-      DB.state[String(chatId)] = null; await saveDb();
-      await sendMessage(chatId, TXT.broadcast_sent);
-      return new Response("ok");
-    }
+          case "admin_list_channels":
+            await answerCallback(callbackQuery.id);
+            const chs = await getChannels();
+            if (chs.length === 0) {
+              await sendMessage(chatId, "Kanal sanawy boş.");
+            } else {
+              await sendMessage(chatId, "Kanalar:\n" + chs.map(c => `• ${c.startsWith("@") ? c : "@" + c}`).join("\n"));
+            }
+            break;
 
-    // awaiting_broadcast_forward
-    if (action === "awaiting_broadcast_forward" && isAdmin(fromId)) {
-      if (msg.forward_from || msg.forward_from_chat) {
-        const targets = await getAdlist();
-        for (const t of targets) {
-          try { await forwardMessage(t, chatId, messageId); } catch (_) {}
+          case "admin_upload_adlist":
+            await answerCallback(callbackQuery.id);
+            await sendMessage(chatId, "Adlist faýlyny (.txt) iberiň. Her setirde bir kanal ýa-da ulanyjy ýerleşsin.");
+            await kv.set(`state:${userId}`, { action: "upload_adlist" });
+            break;
+
+          case "admin_show_adlist":
+            await answerCallback(callbackQuery.id);
+            const adlist = await getAdList();
+            if (adlist.length === 0) {
+              await sendMessage(chatId, "Adlist boş.");
+            } else {
+              await sendMessage(chatId, "Adlist:\n" + adlist.join("\n"));
+            }
+            break;
+
+          case "admin_add_vpn":
+            await answerCallback(callbackQuery.id);
+            await sendMessage(chatId, "VPN kodyňy tekst görnüşinde ýazyň (her bir kody täze setirde).");
+            await kv.set(`state:${userId}`, { action: "add_vpn_text" });
+            break;
+
+          case "admin_upload_vpn_file":
+            await answerCallback(callbackQuery.id);
+            await sendMessage(chatId, "VPN kody bolan faýly (.txt) iberiň. Her setirde bir kod bolsun.");
+            await kv.set(`state:${userId}`, { action: "add_vpn_file" });
+            break;
+
+          case "admin_send_single":
+            await answerCallback(callbackQuery.id);
+            await sendMessage(chatId, "Ibersiňiz gelýän habaryň tekstini ýazyň. (Ulanyja ýa-da kanala ibermek üçin: chat_id ýa-da @username bilen birlikde iberip bilersiňiz.)");
+            await kv.set(`state:${userId}`, { action: "send_single" });
+            break;
+
+          case "admin_send_bulk":
+            await answerCallback(callbackQuery.id);
+            await sendMessage(chatId, "Toplu habar ibermek üçin faýl iberiň (.txt) ýa-da adlist-ä degişli sanawy ulanyň. Her setirde bir chat_id ýa-da @username.");
+            await kv.set(`state:${userId}`, { action: "send_bulk" });
+            break;
+
+          case "admin_add_admin":
+            await answerCallback(callbackQuery.id);
+            await sendMessage(chatId, "Täze adminiň Telegram ID-sini ýazyň (saniýa görnüşinde).");
+            await kv.set(`state:${userId}`, { action: "add_admin" });
+            break;
+
+          case "admin_remove_admin":
+            await answerCallback(callbackQuery.id);
+            await sendMessage(chatId, "Aýrylýan adminiň Telegram ID-sini ýazyň.");
+            await kv.set(`state:${userId}`, { action: "remove_admin" });
+            break;
+
+          case "admin_exit":
+            await answerCallback(callbackQuery.id);
+            await sendMessage(chatId, "Admin panelinden çykdyňyz.");
+            await kv.delete(`state:${userId}`);
+            break;
+
+          default:
+            await answerCallback(callbackQuery.id, "Näbelli admin operasiýasy", true);
         }
-        DB.state[String(chatId)] = null; await saveDb();
-        await sendMessage(chatId, TXT.broadcast_sent);
-      } else {
-        await sendMessage(chatId, "Iltimos forward görnüşinde habar ugradyn.");
+
+        return new Response("OK", { status: 200 });
       }
-      return new Response("ok");
+
+      // unknown callback
+      await answerCallback(callbackQuery.id);
+      return new Response("OK", { status: 200 });
     }
 
-    // awaiting_adlist_file
-    if (action === "awaiting_adlist_file" && isAdmin(fromId)) {
-      if (doc) {
-        const path = await getFilePath(doc.file_id);
-        if (!path) { await sendMessage(chatId, TXT.file_not_found); return new Response("ok"); }
-        const content = await downloadFile(path);
-        if (!content) { await sendMessage(chatId, TXT.file_not_found); return new Response("ok"); }
-        await setAdlistFromText(content);
-        DB.state[String(chatId)] = null; await saveDb();
-        await sendMessage(chatId, "Adlist faýly üstünlikli ýüklendi.");
-      } else if (text) {
-        // allow admins to send adlist as plain text
-        await setAdlistFromText(text);
-        DB.state[String(chatId)] = null; await saveDb();
-        await sendMessage(chatId, "Adlist tekst görnüşinde goýuldy.");
-      } else {
-        await sendMessage(chatId, TXT.ask_adlist_file);
+    // If message is file (document) or text and we have pending state for this admin
+    const stateRes = await kv.get<{ action: string }>(`state:${userId}`);
+    const state = stateRes.value?.action;
+
+    if (state) {
+      switch (state) {
+        case "add_channel": {
+          const channelName = text?.trim();
+          if (!channelName) {
+            await sendMessage(chatId, "Kanal adyny yazmadyň. Haýsy kanaly goşmak isleýändigiňizi ýazyň.");
+            break;
+          }
+          const channels = await getChannels();
+          const normalized = channelName.startsWith("@") ? channelName : `@${channelName}`;
+          if (!channels.includes(normalized)) {
+            channels.push(normalized);
+            await setChannels(channels);
+            await sendMessage(chatId, `✅ ${normalized} kanaly sanawa goşuldy.`);
+          } else {
+            await sendMessage(chatId, `${normalized} öň goşulan.`);
+          }
+          await kv.delete(`state:${userId}`);
+          break;
+        }
+
+        case "remove_channel": {
+          const channelName = text?.trim();
+          if (!channelName) {
+            await sendMessage(chatId, "Aýrylýan kanalyň adyny ýazyň.");
+            break;
+          }
+          const channels = await getChannels();
+          const normalized = channelName.startsWith("@") ? channelName : `@${channelName}`;
+          const idx = channels.indexOf(normalized);
+          if (idx >= 0) {
+            channels.splice(idx, 1);
+            await setChannels(channels);
+            await sendMessage(chatId, `✅ ${normalized} kanaly sanawdan aýryldy.`);
+          } else {
+            await sendMessage(chatId, `${normalized} sanawda ýok.`);
+          }
+          await kv.delete(`state:${userId}`);
+          break;
+        }
+
+        case "upload_adlist": {
+          // expect document
+          const doc = message?.document;
+          if (!doc) {
+            await sendMessage(chatId, "Faýl ibermediňiz. .txt görnüşindäki faýly iberiň.");
+            break;
+          }
+          const file_id = doc.file_id;
+          const buf = await fetchTelegramFile(file_id);
+          if (!buf) {
+            await sendMessage(chatId, "Faýly alyp bolmady.");
+            break;
+          }
+          const lines = parseLines(buf);
+          const existing = await getAdList();
+          const merged = Array.from(new Set([...existing, ...lines]));
+          await setAdList(merged);
+          await sendMessage(chatId, `✅ Adlist faýly üstünlikli ýüklendi. Toplam: ${merged.length}`);
+          await kv.delete(`state:${userId}`);
+          break;
+        }
+
+        case "add_vpn_text": {
+          // Accept text with one or many lines of codes
+          if (!text) {
+            await sendMessage(chatId, "VPN kodlary ýazylmady. Her setire bir kod goýuň.");
+            break;
+          }
+          const lines = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+          const existing = await getVpnCodes();
+          const merged = Array.from(new Set([...existing, ...lines]));
+          await setVpnCodes(merged);
+          await sendMessage(chatId, `✅ ${lines.length} VPN kod goşuldy. Jemi: ${merged.length}`);
+          await kv.delete(`state:${userId}`);
+          break;
+        }
+
+        case "add_vpn_file": {
+          const doc = message?.document;
+          if (!doc) {
+            await sendMessage(chatId, "Faýl ibermediňiz. .txt faýl iberiň.");
+            break;
+          }
+          const buf = await fetchTelegramFile(doc.file_id);
+          if (!buf) {
+            await sendMessage(chatId, "Faýly alyp bolmady.");
+            break;
+          }
+          const lines = parseLines(buf);
+          const existing = await getVpnCodes();
+          const merged = Array.from(new Set([...existing, ...lines]));
+          await setVpnCodes(merged);
+          await sendMessage(chatId, `✅ Faýldan ${lines.length} kod goşuldy. Jemi: ${merged.length}`);
+          await kv.delete(`state:${userId}`);
+          break;
+        }
+
+        case "send_single": {
+          if (!text) {
+            await sendMessage(chatId, "Habar teksti ýok. Teksti ýazyň we ýene /admin bilen gaýtadan paneli çagyruň.");
+            break;
+          }
+          // format: optional target on first line, then message; or if no target, broadcast to adlist
+          const lines = text.split(/\r?\n/);
+          let target = "";
+          let messageText = text;
+          if (lines[0].startsWith("@") || /^\-?\d+$/.test(lines[0])) {
+            target = lines[0].trim();
+            messageText = lines.slice(1).join("\n").trim();
+          }
+          if (!messageText) {
+            await sendMessage(chatId, "Habar tekstini ýazmadyň.");
+            break;
+          }
+          if (target) {
+            await sendMessage(target, messageText);
+            await sendMessage(chatId, `✅ Habar ${target} adresine iberildi.`);
+          } else {
+            // send to adlist if exists
+            const adlist = await getAdList();
+            if (adlist.length === 0) {
+              await sendMessage(chatId, "Adlist boş. Target görkezmediňiz we adlist ýok.");
+            } else {
+              for (const t of adlist) {
+                try {
+                  await sendMessage(t, messageText);
+                } catch (e) {
+                  console.error("send to", t, e);
+                }
+                // we do not throttle here; for production add delays
+              }
+              await sendMessage(chatId, `✅ Toplu habar ${adlist.length} adresine iberildi.`);
+            }
+          }
+          await kv.delete(`state:${userId}`);
+          break;
+        }
+
+        case "send_bulk": {
+          // expect document or use adlist
+          const doc = message?.document;
+          if (doc) {
+            const buf = await fetchTelegramFile(doc.file_id);
+            if (!buf) {
+              await sendMessage(chatId, "Faýly alyp bolmady.");
+              break;
+            }
+            const targets = parseLines(buf);
+            await sendMessage(chatId, "Habar tekstini iberiň (ikitara: adamyňiz / kanaly we habar).");
+            await kv.set(`state:${userId}`, { action: "send_bulk_targets", targets });
+            break;
+          } else {
+            // if no file, use adlist by default
+            const adlist = await getAdList();
+            if (adlist.length === 0) {
+              await sendMessage(chatId, "Adlist boş we faýl hem bermediňiz.");
+              await kv.delete(`state:${userId}`);
+              break;
+            }
+            await sendMessage(chatId, "Toplu habar tekstini ýazyň; adlistdäki hemme adreslere iberiler.");
+            await kv.set(`state:${userId}`, { action: "send_bulk_confirm", targets: adlist });
+            break;
+          }
+        }
+
+        case "send_bulk_targets": {
+          // state has targets list
+          const s = await kv.get<{ action: string, targets: string[] }>(`state:${userId}`);
+          const targets = s.value?.targets ?? [];
+          if (!text) {
+            await sendMessage(chatId, "Habar tekstini ýazmadyň.");
+            break;
+          }
+          for (const t of targets) {
+            try {
+              await sendMessage(t, text);
+            } catch (e) {
+              console.error("bulk send err", e);
+            }
+          }
+          await sendMessage(chatId, `✅ Toplu habar ${targets.length} adresine iberildi.`);
+          await kv.delete(`state:${userId}`);
+          break;
+        }
+
+        case "send_bulk_confirm": {
+          const s = await kv.get<{ action: string, targets: string[] }>(`state:${userId}`);
+          const targets = s.value?.targets ?? [];
+          if (!text) {
+            await sendMessage(chatId, "Habar tekstini ýazmadyň.");
+            break;
+          }
+          for (const t of targets) {
+            try {
+              await sendMessage(t, text);
+            } catch (e) {
+              console.error("bulk send err", e);
+            }
+          }
+          await sendMessage(chatId, `✅ Toplu habar ${targets.length} adresine iberildi.`);
+          await kv.delete(`state:${userId}`);
+          break;
+        }
+
+        case "add_admin": {
+          const idText = text?.trim();
+          if (!idText || !/^\-?\d+$/.test(idText)) {
+            await sendMessage(chatId, "Dogry Telegram ID-si ýazmadyň. San görnüşinde ID iberiň.");
+            break;
+          }
+          const idn = parseInt(idText, 10);
+          const admins = await getAdmins();
+          if (!admins.includes(idn)) {
+            admins.push(idn);
+            await setAdmins(admins);
+            await sendMessage(chatId, `✅ ${idn} admin boldy.`);
+          } else {
+            await sendMessage(chatId, "Bu adam öňden admin.");
+          }
+          await kv.delete(`state:${userId}`);
+          break;
+        }
+
+        case "remove_admin": {
+          const idText = text?.trim();
+          if (!idText || !/^\-?\d+$/.test(idText)) {
+            await sendMessage(chatId, "Dogry Telegram ID-si ýazmadyň.");
+            break;
+          }
+          const idn = parseInt(idText, 10);
+          let admins = await getAdmins();
+          if (admins.includes(idn)) {
+            admins = admins.filter(a => a !== idn);
+            await setAdmins(admins);
+            await sendMessage(chatId, `✅ ${idn} adminlykda aýryldy.`);
+          } else {
+            await sendMessage(chatId, "Bu ID admin sanawynda ýok.");
+          }
+          await kv.delete(`state:${userId}`);
+          break;
+        }
+
+        default:
+          // unknown state — clear
+          await kv.delete(`state:${userId}`);
+          await sendMessage(chatId, "Ýatda saklanan rejesi tapylmady ýa-da ýalňyşlyk boldy. /admin bilen gaýtadan girip görüň.");
       }
-      return new Response("ok");
+
+      return new Response("OK", { status: 200 });
     }
 
-    // awaiting_vpn_file
-    if (action === "awaiting_vpn_file" && isAdmin(fromId)) {
-      if (doc) {
-        const path = await getFilePath(doc.file_id);
-        if (!path) { await sendMessage(chatId, TXT.file_not_found); return new Response("ok"); }
-        const content = await downloadFile(path);
-        if (!content) { await sendMessage(chatId, TXT.file_not_found); return new Response("ok"); }
-        await appendVpnText(content);
-        DB.state[String(chatId)] = null; await saveDb();
-        await sendMessage(chatId, TXT.uploaded_codes_file);
-      } else if (text) {
-        await appendVpnText(text);
-        DB.state[String(chatId)] = null; await saveDb();
-        await sendMessage(chatId, TXT.got_vpn_code);
-      } else {
-        await sendMessage(chatId, TXT.ask_vpn_file);
+    // If no state and incoming document but not admin flow - maybe user wants VPN code file? handle as needed
+    // Additionally, allow user to request a VPN kod: "/getvpn" command returns one code (pop)
+    if (text?.startsWith("/getvpn")) {
+      // Check subscription
+      const subscribed = await isSubscribed(userId);
+      if (!subscribed) {
+        await sendMessage(chatId, "Kody almak üçin ilki başda talap edilen kanallara agza boluň. /start bilen barlaň.");
+        return new Response("OK", { status: 200 });
       }
-      return new Response("ok");
-    }
-
-    // awaiting_new_admin
-    if (action === "awaiting_new_admin" && isAdmin(fromId)) {
-      if (text && /^[0-9]+$/.test(text)) {
-        const id = Number(text);
-        if (!DB.admins.includes(id)) DB.admins.push(id);
-        await saveDb();
-        DB.state[String(chatId)] = null; await saveDb();
-        await sendMessage(chatId, TXT.added_admin(id));
+      const codes = await getVpnCodes();
+      if (codes.length === 0) {
+        await sendMessage(chatId, "Häzir VPN kodlary tapylmady. Admin bilen habarlaşyň.");
       } else {
-        await sendMessage(chatId, "Iltimos diňe san görnüşinde telegram ID-ni ýazyň.");
+        // pop one code and return
+        const code = codes.shift()!;
+        await setVpnCodes(codes);
+        await sendMessage(chatId, `🎟️ Siziň VPN kodyňyz: <code>${code}</code>\nHaýyş: kody kimse bilen paýlaşmaň.`);
       }
-      return new Response("ok");
+      return new Response("OK", { status: 200 });
     }
-  }
 
-  // --- admin quick text commands ---
-  if (isAdmin(fromId)) {
-    if (text.toLowerCase().startsWith("/addchannel")) {
-      const parts = text.split(/\s+/);
-      const ch = parts[1];
-      if (ch) { if (!DB.channels.includes(ch)) DB.channels.push(ch); await saveDb(); await sendMessage(chatId, TXT.added_channel(ch)); } else { await sendMessage(chatId, "Ulanyp: /addchannel @channel_name"); }
-      return new Response("ok");
-    }
-    if (text.toLowerCase().startsWith("/removechannel")) {
-      const parts = text.split(/\s+/);
-      const ch = parts[1];
-      if (ch) { DB.channels = DB.channels.filter(c=>c!==ch); await saveDb(); await sendMessage(chatId, TXT.removed_channel(ch)); } else { await sendMessage(chatId, "Ulanyp: /removechannel @channel_name"); }
-      return new Response("ok");
-    }
-    if (text.toLowerCase().startsWith("/addvpn")) {
-      const code = text.replace(/\/addvpn\s*/i, "").trim();
-      if (code) { await appendVpnText(code); await sendMessage(chatId, TXT.got_vpn_code); } else { await sendMessage(chatId, "Ulanyp: /addvpn KOD123"); }
-      return new Response("ok");
-    }
+    return new Response("OK", { status: 200 });
+  } catch (e) {
+    console.error("Update handling error:", e);
+    return new Response("Xeta", { status: 200 });
   }
-
-  // --- user confirms joined (inline callback 'i_joined' will normally be sent as callback_query; handle fallback plain text) ---
-  if (text === "✅ Men ähli kanallara agza boldum" || /men.+kanallara.+agza/.test(text.toLowerCase())) {
-    const code = await popVpnCode();
-    if (!code) { await sendMessage(chatId, TXT.no_vpn_codes, { reply_to_message_id: messageId }); return new Response("ok"); }
-    await sendMessage(chatId, TXT.vpn_code_sent(code), { reply_to_message_id: messageId });
-    return new Response("ok");
-  }
-
-  // help
-  if (text.toLowerCase() === "/help") {
-    await sendMessage(chatId, "Salam! /start bilen başlaň. Adminler üçin /admin.\nAdminler: inline panel üçin /admin ýa-da paneldäki düwmelerden peýdalanyň.");
-    return new Response("ok");
-  }
-
-  return new Response("ok");
 });
-
-console.log("Bot işläp başlady. Webhook path:", SECRET_PATH);
-
-
-
-
-
