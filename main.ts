@@ -16,7 +16,7 @@ const SECRET_PATH = "/masakoffvpnhelper"; // webhook path — set your webhook u
 
 // (Mömkün bolsa) admin sekret: /admin <secret> ýazany bilen şol ulanyjyny admin hökmünde goşar.
 // Oýlanyşly howpsuzlyk üçin bu ýarym-ýol: ilkinji admin çykarmak üçin peýdaly.
-const ADMIN_SECRET = Deno.env.get("ADMIN_SECRET") || "";
+const ADMIN_SECRET = "123456789";
 
 // Deno KV
 const kv = await Deno.openKv();
