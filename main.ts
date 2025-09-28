@@ -3,83 +3,75 @@ import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 // Telegram setup
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
-const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
-const TARGET_CHANNEL = "@MasakoffVpns";
-const MESSAGE_TEXT = "👆Ýokarky koda 2je like basyň♥️✅️";
-
-// Deno KV (persistent storage)
+const API = `https://api.telegram.org/bot${TOKEN}`;
 const kv = await Deno.openKv();
 
-// Save last message info
-async function saveLastMessage(messageId: number) {
-  await kv.set(["lastMessage"], { messageId, timestamp: Date.now() });
+// Admin IDs (ilk başta sadece seni ekliyorum)
+let ADMINS: number[] = [7171269159]; // buraya kendi Telegram ID-ni yaz
+
+// Helper: sendMessage
+async function sendMessage(chat_id: number | string, text: string, buttons: any = null) {
+  const body: any = { chat_id, text, parse_mode: "HTML" };
+  if (buttons) body.reply_markup = { inline_keyboard: buttons };
+  await fetch(`${API}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
-// Get last message info
-async function getLastMessage(): Promise<{ messageId: number; timestamp: number } | null> {
-  const res = await kv.get(["lastMessage"]);
-  return res.value ?? null;
-}
+// Handle updates
+async function handleUpdate(update: any) {
+  if (!update.message) return;
+  const msg = update.message;
+  const chatId = msg.chat.id;
+  const text = msg.text;
 
-// Send message
-async function sendMessage(): Promise<number | null> {
-  try {
-    const resp = await fetch(`${TELEGRAM_API}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: TARGET_CHANNEL,
-        text: MESSAGE_TEXT,
-        parse_mode: "HTML",
-      }),
-    });
-    const data = await resp.json();
-    if (!data.ok) {
-      console.error("Failed to send message:", data);
-      return null;
+  // /start
+  if (text === "/start") {
+    const channels = (await kv.get(["channels"])).value ?? [];
+    const buttons = channels.map((c: string) => [{ text: c, url: `https://t.me/${c.replace("@", "")}` }]);
+    await sendMessage(
+      chatId,
+      "👋 Salam! VPN kody almak üçin aşakdaky kanallara goşulmagyňyz gerek:",
+      buttons
+    );
+  }
+
+  // /admin
+  if (text === "/admin") {
+    if (!ADMINS.includes(chatId)) {
+      await sendMessage(chatId, "❌ Admin paneline rugsat ýok!");
+      return;
     }
-    await saveLastMessage(data.result.message_id);
-    return data.result.message_id;
-  } catch (e) {
-    console.error("Error sending message:", e);
-    return null;
+    await sendMessage(chatId, "👮 Admin paneli", [
+      [{ text: "📢 Ryssylka", callback_data: "ryssylka" }],
+      [{ text: "➕ Kanal goş", callback_data: "add_channel" }],
+      [{ text: "📋 Kanal listi", callback_data: "list_channels" }],
+      [{ text: "👑 Admin goş", callback_data: "add_admin" }],
+      [{ text: "🔑 VPN kod goş", callback_data: "add_vpn" }],
+    ]);
   }
 }
 
-// Delete message
-async function deleteMessage(messageId: number) {
-  try {
-    await fetch(`${TELEGRAM_API}/deleteMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: TARGET_CHANNEL, message_id: messageId }),
-    });
-  } catch (e) {
-    console.error("Error deleting message:", e);
-  }
-}
-
-// Main loop function (check every minute)
-async function loop() {
-  const last = await getLastMessage();
-  const now = Date.now();
-
-  if (!last) {
-    // First time: send message
-    await sendMessage();
-  } else {
-    // Check if 5 minutes passed
-    if (now - last.timestamp >= 5 * 60 * 1000) {
-      // Delete old message
-      await deleteMessage(last.messageId);
-      // Send new message
-      await sendMessage();
+// Long polling
+async function poll() {
+  let offset = 0;
+  while (true) {
+    const res = await fetch(`${API}/getUpdates?timeout=30&offset=${offset}`);
+    const data = await res.json();
+    for (const update of data.result) {
+      offset = update.update_id + 1;
+      try {
+        await handleUpdate(update);
+      } catch (e) {
+        console.error("Update error:", e);
+      }
     }
   }
 }
 
-// Run loop every 1 minute
-setInterval(loop, 60 * 1000);
+poll();
 
 // HTTP server for health check
-serve((_req: Request) => new Response("Bot is running"));
+serve(() => new Response("Bot işläp dur")) 
