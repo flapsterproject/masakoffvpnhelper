@@ -6,7 +6,7 @@
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import * as smd from "npm:social-media-downloader";
-import instagramGetUrl from "npm:instagram-url-direct";
+
 
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
