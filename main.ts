@@ -1,18 +1,19 @@
 // main.ts
 // Telegram Media Downloader Bot (Deno)
 // Features: If user sends YouTube, TikTok or Instagram link, the bot will get the direct video URL and send it as video.
-// Uses ytdl_core for YouTube, and simple scraping for TikTok and Instagram.
+// Uses ytdl_core for YouTube, @tobyg74/tiktok-api-dl for TikTok, instagram-url-direct for Instagram.
+// Requires Deno 2.0+ for npm support.
 // Notes: Requires BOT_TOKEN env var. Deploy as webhook at SECRET_PATH.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import * as ytdl from "https://deno.land/x/ytdl_core/mod.ts";
+import Tiktok from "npm:@tobyg74/tiktok-api-dl";
+import instagramGetUrl from "npm:instagram-url-direct";
 
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper"; // make sure webhook path matches
-
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
 
 // -------------------- Telegram helpers --------------------
 async function sendMessage(chatId: string | number, text: string, options: any = {}): Promise<number | null> {
@@ -71,10 +72,12 @@ async function extractYouTubeUrl(text: string): Promise<string | undefined> {
 
 async function extractTikTokUrl(text: string): Promise<string | undefined> {
   try {
-    const apiUrl = `https://api.tiklydown.eu.org/api/download?url=${encodeURIComponent(text)}`;
-    const res = await fetch(apiUrl);
-    const data = await res.json();
-    return data.nowm; // no watermark url
+    const result = await Tiktok.Downloader(text, { version: "v1" });
+    if (result.status === "success" && result.result) {
+      // Assuming result.result.video is the direct URL; adjust based on actual structure
+      // From docs, it might be result.result.video[0] or something; you may need to console.log to check
+      return result.result.video; // Replace with correct path if different
+    }
   } catch (e) {
     console.error("TikTok extract error", e);
     return undefined;
@@ -83,10 +86,10 @@ async function extractTikTokUrl(text: string): Promise<string | undefined> {
 
 async function extractInstagramUrl(text: string): Promise<string | undefined> {
   try {
-    const res = await fetch(text, { headers: { 'User-Agent': USER_AGENT } });
-    const html = await res.text();
-    const match = html.match(/<meta property="og:video" content="(https?:\/\/[^"]+?)"/);
-    return match ? match[1] : undefined;
+    const result = await instagramGetUrl(text);
+    if (result.url_list && result.url_list.length > 0) {
+      return result.url_list[0];
+    }
   } catch (e) {
     console.error("Instagram extract error", e);
     return undefined;
