@@ -1,17 +1,18 @@
 // main.ts
 // Telegram Media Downloader Bot (Deno)
 // Features: If user sends YouTube, TikTok or Instagram link, the bot will get the direct video URL and send it as video.
-// Uses social-media-downloader for YouTube and TikTok, instagram-url-direct for Instagram.
+// Uses ytdl_core for YouTube, and simple scraping for TikTok and Instagram.
 // Notes: Requires BOT_TOKEN env var. Deploy as webhook at SECRET_PATH.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import * as smd from "npm:social-media-downloader";
-
+import * as ytdl from "https://deno.land/x/ytdl_core/mod.ts";
 
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper"; // make sure webhook path matches
+
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
 
 // -------------------- Telegram helpers --------------------
 async function sendMessage(chatId: string | number, text: string, options: any = {}): Promise<number | null> {
@@ -47,6 +48,51 @@ async function sendVideo(chatId: string | number, videoUrl: string, options: any
   }
 }
 
+// -------------------- Extractors --------------------
+async function extractYouTubeUrl(text: string): Promise<string | undefined> {
+  let videoId: string | null = null;
+  if (text.includes("youtube.com")) {
+    const params = new URLSearchParams(new URL(text).search);
+    videoId = params.get("v");
+  } else if (text.includes("youtu.be")) {
+    videoId = new URL(text).pathname.slice(1);
+  }
+  if (!videoId) return undefined;
+
+  try {
+    const info = await ytdl.getBasicInfo(videoId);
+    const format = ytdl.chooseFormat(info.formats, { quality: "highest", filter: "audioandvideo" });
+    return format.url;
+  } catch (e) {
+    console.error("YouTube extract error", e);
+    return undefined;
+  }
+}
+
+async function extractTikTokUrl(text: string): Promise<string | undefined> {
+  try {
+    const apiUrl = `https://api.tiklydown.eu.org/api/download?url=${encodeURIComponent(text)}`;
+    const res = await fetch(apiUrl);
+    const data = await res.json();
+    return data.nowm; // no watermark url
+  } catch (e) {
+    console.error("TikTok extract error", e);
+    return undefined;
+  }
+}
+
+async function extractInstagramUrl(text: string): Promise<string | undefined> {
+  try {
+    const res = await fetch(text, { headers: { 'User-Agent': USER_AGENT } });
+    const html = await res.text();
+    const match = html.match(/<meta property="og:video" content="(https?:\/\/[^"]+?)"/);
+    return match ? match[1] : undefined;
+  } catch (e) {
+    console.error("Instagram extract error", e);
+    return undefined;
+  }
+}
+
 // -------------------- Main handler --------------------
 async function handleUpdate(update: any) {
   if (update.message) {
@@ -78,20 +124,17 @@ async function handleUpdate(update: any) {
 
     try {
       if (host.includes("youtube.com") || host === "youtu.be") {
-        const result = await smd.youtube(text);
-        directUrl = result.url; // Assuming the structure has 'url'
+        directUrl = await extractYouTubeUrl(text);
       } else if (host.includes("tiktok.com")) {
-        const result = await smd.tiktok(text);
-        directUrl = result.url; // Assuming the structure has 'url'
+        directUrl = await extractTikTokUrl(text);
       } else if (host.includes("instagram.com")) {
-        const result = await instagramGetUrl(text);
-        directUrl = result.url_list[0];
+        directUrl = await extractInstagramUrl(text);
       } else {
         await sendMessage(chatId, "Unsupported link. Supported: YouTube, TikTok, Instagram.");
         return;
       }
     } catch (e) {
-      console.error("Download error:", e);
+      console.error("Extract error", e);
       await sendMessage(chatId, "Failed to get the video. Try another link or later.");
       return;
     }
