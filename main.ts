@@ -128,8 +128,8 @@ serve(async (req: Request) => {
       }
       await sendMessage(chatId, "⚠️ Ilki ähli kanallara agza bolmaly! Agza bolanyňyzdan soň aşakdaky düwmä basyň. 📢", {
         inline_keyboard: [
-          [{ text: "AGZA BOLDUM✅", callback_data: "check_sub" }],
-          ...channelButtons
+          ...channelButtons,
+          [{ text: "AGZA BOLDUM✅", callback_data: "check_sub" }]
         ]
       });
     }
@@ -151,8 +151,8 @@ serve(async (req: Request) => {
       }
       replyMarkup = {
         inline_keyboard: [
-          [{ text: "AGZA BOLDUM✅", callback_data: "check_sub" }],
-          ...channelButtons
+          ...channelButtons,
+          [{ text: "AGZA BOLDUM✅", callback_data: "check_sub" }]
         ]
       };
     }
