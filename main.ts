@@ -6,7 +6,7 @@ const kv = await Deno.openKv();
 const TOKEN = Deno.env.get("BOT_TOKEN");
 const SECRET_PATH = "/masakoffvpnhelper"; // change this
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
-const CHANNELS = ["@FlapsterMiner", "@MasakoffVpns"]; // your channels
+const CHANNELS = ["FlapsterMiner", "MasakoffVpns"]; // your channels
 const ADMIN_USERNAME = "Masakoff"; // admin username without @
 
 serve(async (req: Request) => {
