@@ -38,7 +38,7 @@ async function saveData(file: string, data: any): Promise<void> {
 }
 
 // Initialize data
-let admins: number[] = await loadData(ADMINS_FILE, []);
+let admins: string[] = await loadData(ADMINS_FILE, ["Masakoff"]);
 let channels: { name: string; link: string; username: string }[] = await loadData(CHANNELS_FILE, []);
 let vpnCodes: string[] = await loadData(CODES_FILE, []);
 let users: number[] = await loadData(USERS_FILE, []);
@@ -81,6 +81,7 @@ async function handleMessage(msg: any) {
   const text = msg.text?.trim() || "";
   const chatId = msg.chat.id;
   const userId = msg.from.id;
+  const username = msg.from.username ?? "";
 
   // Add user if new
   if (!users.includes(userId)) {
@@ -121,17 +122,13 @@ async function handleMessage(msg: any) {
       await sendMessage(chatId, "Ryssylka ugradyldy.");
       return;
     } else if (state === "add_admin") {
-      try {
-        const newAdmin = parseInt(text);
-        if (!admins.includes(newAdmin)) {
-          admins.push(newAdmin);
-          await saveData(ADMINS_FILE, admins);
-          await sendMessage(chatId, "Täze admin goşuldy.");
-        } else {
-          await sendMessage(chatId, "Bu admin eýýäm bar.");
-        }
-      } catch {
-        await sendMessage(chatId, "Nädogry ID!");
+      const newAdmin = text.startsWith("@") ? text.slice(1) : text;
+      if (!admins.includes(newAdmin)) {
+        admins.push(newAdmin);
+        await saveData(ADMINS_FILE, admins);
+        await sendMessage(chatId, "Täze admin goşuldy.");
+      } else {
+        await sendMessage(chatId, "Bu admin eýýäm bar.");
       }
       return;
     } else if (state === "add_vpn_code") {
@@ -162,7 +159,7 @@ async function handleMessage(msg: any) {
   }
 
   // Admin-only commands (not using / for flexibility)
-  if (admins.includes(userId)) {
+  if (admins.includes(username)) {
     if (text.startsWith("add_channel ")) {
       try {
         const parts = text.slice(11).trim().split(" ");
@@ -200,7 +197,7 @@ async function handleMessage(msg: any) {
   }
 
   if (text === "/admin") {
-    if (!admins.includes(userId)) {
+    if (!admins.includes(username)) {
       await sendMessage(chatId, "Siz admin däl!");
       return;
     }
@@ -221,6 +218,7 @@ async function handleCallbackQuery(callback: any) {
   const data = callback.data;
   const chatId = callback.message.chat.id;
   const messageId = callback.message.message_id;
+  const username = callback.from.username ?? "";
 
   // Answer the callback to remove loading
   await fetch(`${TELEGRAM_API}/answerCallbackQuery`, {
@@ -228,8 +226,6 @@ async function handleCallbackQuery(callback: any) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ callback_query_id: callback.id }),
   });
-
-  if (!admins.includes(userId)) return; // Most callbacks are admin-only, but check_join is for users
 
   if (data === "check_join") {
     let joinedAll = true;
@@ -254,6 +250,9 @@ async function handleCallbackQuery(callback: any) {
     }
     return;
   }
+
+  // Most callbacks are admin-only, check now
+  if (!admins.includes(username)) return;
 
   // Admin callbacks
   if (data === "broadcast") {
