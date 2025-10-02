@@ -1,21 +1,23 @@
 // main.ts
-// Telegram DeepSeek Chatbot (Deno)
-// Features: A strong AI chatbot using DeepSeek's free API to answer any question.
-// Uses DeepSeek API for chat completions (model: deepseek-chat).
+// Telegram Groq Chatbot (Deno)
+// Features: A unique, fast AI chatbot using Groq's free API for logical, detailed answers, better than ChatGPT in speed and reasoning.
+// Uses Groq API for chat completions (model: llama3-70b-8192 for strong logical responses).
+// Supports conversation history for context-aware replies, multiple modes (e.g., /code for coding help, /math for math solving).
 // Requires Deno 2.0+.
-// Notes: Requires BOT_TOKEN and DEEPSEEK_API_KEY env vars. Deploy as webhook at SECRET_PATH.
-// To get a free DeepSeek API key, sign up at https://platform.deepseek.com/ and generate one in your dashboard. The free tier has daily usage limits (e.g., tokens per day). Check https://platform.deepseek.com/docs for details.
+// Notes: Requires BOT_TOKEN and GROQ_API_KEY env vars. Deploy as webhook at SECRET_PATH.
+// To get a free Groq API key, sign up at https://console.groq.com/ and generate one. Free tier has rate limits (e.g., ~10 queries/min); check docs for details.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
-const DEEPSEEK_API_KEY = Deno.env.get("DEEPSEEK_API_KEY")!;
-if (!DEEPSEEK_API_KEY) throw new Error("DEEPSEEK_API_KEY env var is required");
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
-const DEEPSEEK_API = "https://api.deepseek.com/v1/chat/completions";
+const GROQ_API = "https://api.groq.com/openai/v1/chat/completions";
 const SECRET_PATH = "/masakoffvpnhelper"; // make sure webhook path matches
-const MODEL = "deepseek-chat"; // Use deepseek-chat for general queries; adjust if needed (e.g., deepseek-coder for code-related)
+const MODEL = "llama3-70b-8192"; // Fast and logical model; adjust if needed (e.g., mixtral-8x7b-32768 for mixture of experts)
+
+// Conversation history storage (in-memory, per chat)
+const chatHistories: Map<string, any[]> = new Map();
 
 // -------------------- Telegram helpers --------------------
 async function sendMessage(chatId: string | number, text: string, options: any = {}): Promise<number | null> {
@@ -35,33 +37,51 @@ async function sendMessage(chatId: string | number, text: string, options: any =
 }
 
 // -------------------- AI Response --------------------
-async function getAIResponse(prompt: string): Promise<string | undefined> {
+async function getAIResponse(chatId: string, prompt: string, mode: string = "default"): Promise<string | undefined> {
+  let systemPrompt = "You are a highly intelligent AI assistant, providing logical, detailed, and truthful answers. Always reason step-by-step, explain your thought process, and provide evidence or examples where possible. Be helpful, concise yet comprehensive, and engaging.";
+
+  if (mode === "code") {
+    systemPrompt = "You are an expert coder. Provide clean, efficient code with explanations, error handling, and best practices. Support multiple languages.";
+  } else if (mode === "math") {
+    systemPrompt = "You are a math genius. Solve problems step-by-step, use LaTeX for equations where appropriate, and explain concepts clearly.";
+  } else if (mode === "creative") {
+    systemPrompt = "You are a creative storyteller. Generate imaginative stories, poems, or ideas based on the user's prompt.";
+  }
+
   try {
+    let history = chatHistories.get(chatId) || [];
+    history.push({ role: "user", content: prompt });
+
     const body = {
       model: MODEL,
       messages: [
-        { role: "system", content: "You are a helpful and intelligent AI assistant." },
-        { role: "user", content: prompt },
+        { role: "system", content: systemPrompt },
+        ...history.slice(-10), // Keep last 10 messages for context
       ],
       temperature: 0.7,
-      max_tokens: 1024,
+      max_tokens: 2048,
     };
-    const res = await fetch(DEEPSEEK_API, {
+    const res = await fetch(GROQ_API, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${DEEPSEEK_API_KEY}`,
+        "Authorization": `Bearer ${GROQ_API_KEY}`,
       },
       body: JSON.stringify(body),
     });
     if (!res.ok) {
-      console.error("DeepSeek API response not ok:", await res.text());
+      console.error("Groq API response not ok:", await res.text());
       return undefined;
     }
     const data = await res.json();
-    return data.choices?.[0]?.message?.content?.trim();
+    const response = data.choices?.[0]?.message?.content?.trim();
+    if (response) {
+      history.push({ role: "assistant", content: response });
+      chatHistories.set(chatId, history);
+    }
+    return response;
   } catch (e) {
-    console.error("DeepSeek API error", e);
+    console.error("Groq API error", e);
     return undefined;
   }
 }
@@ -75,18 +95,42 @@ async function handleUpdate(update: any) {
     const chatId = String(msg.chat.id);
 
     if (text.startsWith("/start") || text.startsWith("/help")) {
-      const helpText = `🌟 Welcome to DeepSeek Chatbot!\n\nI'm powered by DeepSeek's API to answer any question you have. 🤖\n\nJust send me a message with your question or topic, and I'll respond! Note: This uses the free tier, so there may be usage limits.`;
+      const helpText = `🌟 Welcome to Groq Chatbot!\n\nI'm a unique, fast AI powered by Groq for logical and detailed answers, better than ChatGPT in speed and reasoning. 🚀\n\nFeatures:\n- Contextual conversations (remembers recent history)\n- Default mode: General questions with step-by-step logic\n- /code [query]: Coding help and snippets\n- /math [query]: Math solving with explanations\n- /creative [query]: Stories, poems, ideas\n- /clear: Clear conversation history\n\nJust send a message or use a command!`;
       await sendMessage(chatId, helpText);
+      return;
+    }
+
+    if (text.startsWith("/clear")) {
+      chatHistories.delete(chatId);
+      await sendMessage(chatId, "Conversation history cleared!");
       return;
     }
 
     if (!text) return;
 
+    let mode = "default";
+    let prompt = text;
+    if (text.startsWith("/code ")) {
+      mode = "code";
+      prompt = text.slice(6).trim();
+    } else if (text.startsWith("/math ")) {
+      mode = "math";
+      prompt = text.slice(6).trim();
+    } else if (text.startsWith("/creative ")) {
+      mode = "creative";
+      prompt = text.slice(10).trim();
+    }
+
+    if (!prompt) {
+      await sendMessage(chatId, "Please provide a query after the command.");
+      return;
+    }
+
     await sendMessage(chatId, "Thinking...");
 
     let aiResponse: string | undefined;
     try {
-      aiResponse = await getAIResponse(text);
+      aiResponse = await getAIResponse(chatId, prompt, mode);
     } catch (e) {
       console.error("AI response error", e);
       await sendMessage(chatId, "Failed to get a response. Try again later.");
@@ -98,7 +142,7 @@ async function handleUpdate(update: any) {
       return;
     }
 
-    await sendMessage(chatId, aiResponse);
+    await sendMessage(chatId, aiResponse, { parse_mode: "Markdown" }); // Support Markdown for better formatting
   }
 }
 
