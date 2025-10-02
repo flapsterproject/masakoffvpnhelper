@@ -1,304 +1,161 @@
 // main.ts
-// Telegram Sponsor Bot (Deno)
-// Features: VPN code distribution bot with mandatory channel subscriptions.
-// Admins can manage channels, add admins, add VPN codes (text or file), broadcast messages.
-// Users must join all mandatory channels to get a VPN code.
-// All messages in Turkmen.
-// Requires Deno 2.0+.
-// Notes: Requires BOT_TOKEN env var. Deploy as webhook at SECRET_PATH.
-// Bot must be admin in channels to check memberships.
-// Channels added as: add_channel Name https://t.me/username
-// Stores data in JSON files for persistence.
-
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
-const TOKEN = Deno.env.get("BOT_TOKEN")!;
-if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
+const kv = await Deno.openKv();
+
+const TOKEN = Deno.env.get("BOT_TOKEN");
+const SECRET_PATH = "/masakoffvpnhelper"; // change this
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
-const SECRET_PATH = "/masakoffvpnhelper"; // Change to your webhook path
+const CHANNELS = ["@FlapsterMiner"]; // your channels
+const ADMIN_USERNAME = "Masakoff"; // admin username without @
 
-// Data files
-const ADMINS_FILE = "admins.json";
-const CHANNELS_FILE = "channels.json";
-const CODES_FILE = "codes.json";
-const USERS_FILE = "users.json";
-
-// Load/Save functions
-async function loadData(file: string, defaultValue: any): Promise<any> {
-  try {
-    const text = await Deno.readTextFile(file);
-    return JSON.parse(text);
-  } catch {
-    return defaultValue;
+serve(async (req: Request) => {
+  const { pathname } = new URL(req.url);
+  if (pathname !== SECRET_PATH) {
+    return new Response("Bot is running.", { status: 200 });
   }
-}
 
-async function saveData(file: string, data: any): Promise<void> {
-  await Deno.writeTextFile(file, JSON.stringify(data));
-}
+  if (req.method !== "POST") {
+    return new Response("Method Not Allowed", { status: 405 });
+  }
 
-// Initialize data
-let admins: string[] = await loadData(ADMINS_FILE, ["Masakoff"]);
-let channels: { name: string; link: string; username: string }[] = await loadData(CHANNELS_FILE, []);
-let vpnCodes: string[] = await loadData(CODES_FILE, []);
-let users: number[] = await loadData(USERS_FILE, []);
+  const update = await req.json();
+  const message = update.message;
+  const callbackQuery = update.callback_query;
+  const chatId = message?.chat?.id || callbackQuery?.message?.chat?.id;
+  const userId = message?.from?.id || callbackQuery?.from?.id;
+  const text = message?.text;
+  const data = callbackQuery?.data;
+  const messageId = callbackQuery?.message?.message_id;
+  const username = message?.from?.username;
+  const document = message?.document;
 
-// States for multi-step interactions (per user)
-const states: Map<number, string> = new Map();
+  if (!chatId || !userId) return new Response("No chat ID or user ID", { status: 200 });
 
-// -------------------- Telegram helpers --------------------
-async function sendMessage(chatId: number, text: string, options: any = {}): Promise<number | null> {
-  try {
-    const body: any = { chat_id: chatId, text, ...options };
-    const res = await fetch(`${TELEGRAM_API}/sendMessage`, {
+  // Function to send message
+  async function sendMessage(cid: number, msg: string, markup?: any) {
+    await fetch(`${TELEGRAM_API}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        chat_id: cid,
+        text: msg,
+        reply_markup: markup
+      })
     });
-    const data = await res.json();
-    return data.result?.message_id ?? null;
-  } catch (e) {
-    console.error("sendMessage error", e);
-    return null;
-  }
-}
-
-async function checkMembership(userId: number, channelUsername: string): Promise<boolean> {
-  try {
-    const res = await fetch(`${TELEGRAM_API}/getChatMember?chat_id=@${channelUsername}&user_id=${userId}`);
-    const data = await res.json();
-    if (!data.ok) return false;
-    const status = data.result.status;
-    return ["creator", "administrator", "member"].includes(status);
-  } catch (e) {
-    console.error("checkMembership error", e);
-    return false;
-  }
-}
-
-// -------------------- Handlers --------------------
-async function handleMessage(msg: any) {
-  const text = msg.text?.trim() || "";
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  const username = msg.from.username ?? "";
-
-  // Add user if new
-  if (!users.includes(userId)) {
-    users.push(userId);
-    await saveData(USERS_FILE, users);
   }
 
-  // Check for states first
-  if (states.has(userId)) {
-    const state = states.get(userId)!;
-    states.delete(userId);
-
-    if (state === "broadcast_type") {
-      const input = text;
-      if (input === "toplu") {
-        await sendMessage(chatId, "Toplu ryssylka tekstini ýazyň:");
-        states.set(userId, "broadcast_all_text");
-      } else {
-        try {
-          const targetId = parseInt(input);
-          await sendMessage(chatId, "Ryssylka tekstini ýazyň:");
-          states.set(userId, `broadcast_single_text_${targetId}`);
-        } catch {
-          await sendMessage(chatId, "Nädogry ID!");
-        }
-      }
-      return;
-    } else if (state === "broadcast_all_text") {
-      const msgText = text;
-      for (const u of users) {
-        await sendMessage(u, msgText);
-      }
-      await sendMessage(chatId, "Toplu ryssylka ugradyldy.");
-      return;
-    } else if (state.startsWith("broadcast_single_text_")) {
-      const targetId = parseInt(state.split("_")[3]);
-      await sendMessage(targetId, text);
-      await sendMessage(chatId, "Ryssylka ugradyldy.");
-      return;
-    } else if (state === "add_admin") {
-      const newAdmin = text.startsWith("@") ? text.slice(1) : text;
-      if (!admins.includes(newAdmin)) {
-        admins.push(newAdmin);
-        await saveData(ADMINS_FILE, admins);
-        await sendMessage(chatId, "Täze admin goşuldy.");
-      } else {
-        await sendMessage(chatId, "Bu admin eýýäm bar.");
-      }
-      return;
-    } else if (state === "add_vpn_code") {
-      if (msg.document) {
-        try {
-          const fileId = msg.document.file_id;
-          const fileRes = await fetch(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
-          const fileData = await fileRes.json();
-          if (!fileData.ok) throw new Error();
-          const filePath = fileData.result.file_path;
-          const downloadRes = await fetch(`https://api.telegram.org/file/bot${TOKEN}/${filePath}`);
-          if (!downloadRes.ok) throw new Error("Download failed");
-          const fileText = await downloadRes.text();
-          const codes = fileText.split("\n").map((c: string) => c.trim()).filter((c: string) => c);
-          if (codes.length === 0) {
-            await sendMessage(chatId, "Faýlda kod ýok.");
-            return;
-          }
-          vpnCodes.push(...codes);
-          await saveData(CODES_FILE, vpnCodes);
-          await sendMessage(chatId, `Faýldan ${codes.length} kod goşuldy.`);
-        } catch (e) {
-          console.error("File download error", e);
-          await sendMessage(chatId, "Faýly ýüklemekde ýalňyşlyk.");
-        }
-      } else if (text) {
-        vpnCodes.push(text);
-        await saveData(CODES_FILE, vpnCodes);
-        await sendMessage(chatId, "Kod goşuldy.");
-      } else {
-        await sendMessage(chatId, "Kod ýa-da faýl ugradyň!");
-      }
-      return;
-    }
+  // Function to send document
+  async function sendDocument(cid: number, fileId: string) {
+    await fetch(`${TELEGRAM_API}/sendDocument`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: cid,
+        document: fileId
+      })
+    });
   }
 
-  // Admin-only commands (not using / for flexibility)
-  if (admins.includes(username)) {
-    if (text.startsWith("add_channel ")) {
+  // Function to check subscription
+  async function isSubscribed(uid: number) {
+    for (const channel of CHANNELS) {
       try {
-        const parts = text.slice(11).trim().split(" ");
-        if (parts.length < 2) throw new Error();
-        const name = parts[0];
-        const link = parts[1];
-        const username = link.split("/").pop()!;
-        channels.push({ name, link, username });
-        await saveData(CHANNELS_FILE, channels);
-        await sendMessage(chatId, "Kanal goşuldy.");
-        return;
-      } catch {
-        await sendMessage(chatId, "Format: add_channel Name https://t.me/username");
+        const res = await fetch(`${TELEGRAM_API}/getChatMember?chat_id=${channel}&user_id=${uid}`);
+        const data = await res.json();
+        if (!data.ok) return false;
+        const status = data.result.status;
+        if (status === "left" || status === "kicked") return false;
+      } catch (e) {
+        console.error(e);
+        return false;
       }
-    } else if (text.startsWith("remove_channel ")) {
-      try {
-        const name = text.slice(14).trim();
-        channels = channels.filter((ch) => ch.name !== name);
-        await saveData(CHANNELS_FILE, channels);
-        await sendMessage(chatId, "Kanal aýyryldy.");
-        return;
-      } catch {
-        await sendMessage(chatId, "Format: remove_channel Name");
-      }
+    }
+    return true;
+  }
+
+  // Handle admin /changefile command
+  if (text === "/changefile") {
+    if (username !== ADMIN_USERNAME) {
+      await sendMessage(chatId, "⚠️ You are not authorized to use this command.");
+      return new Response("OK", { status: 200 });
+    }
+    await kv.set(["admin_state", chatId], "waiting_for_file");
+    await sendMessage(chatId, "Please send me the file.");
+    return new Response("OK", { status: 200 });
+  }
+
+  // Handle file upload from admin
+  if (document) {
+    const state = await kv.get(["admin_state", chatId]);
+    if (state.value === "waiting_for_file" && username === ADMIN_USERNAME) {
+      const fileId = document.file_id;
+      await kv.set(["current_file_id"], fileId);
+      await kv.delete(["admin_state", chatId]);
+      await sendMessage(chatId, "File updated successfully.");
+      return new Response("OK", { status: 200 });
     }
   }
 
-  // Regular commands
-  if (text === "/start") {
-    const msgText = "Salam! VPN kody almak üçin aşakdaky kanallara agza bolmaly.";
-    const inlineKeyboard = channels.map((ch) => [{ text: ch.name, url: ch.link }]);
-    inlineKeyboard.push([{ text: "Agzalygymy barla", callback_data: "check_join" }]);
-    await sendMessage(chatId, msgText, { reply_markup: { inline_keyboard: inlineKeyboard } });
-    return;
-  }
+  // Handle /start command
+  if (text?.startsWith("/start")) {
+    const subscribed = await isSubscribed(userId);
 
-  if (text === "/admin") {
-    if (!admins.includes(username)) {
-      await sendMessage(chatId, "Siz admin däl!");
-      return;
-    }
-    const msgText = "Admin paneline hoş geldiňiz!";
-    const inlineKeyboard = [
-      [{ text: "Ryssylka", callback_data: "broadcast" }],
-      [{ text: "Kanallar dolandyryş", callback_data: "manage_channels" }],
-      [{ text: "Admin goş", callback_data: "add_admin" }],
-      [{ text: "VPN kody goş", callback_data: "add_vpn_code" }],
-    ];
-    await sendMessage(chatId, msgText, { reply_markup: { inline_keyboard: inlineKeyboard } });
-    return;
-  }
-}
-
-async function handleCallbackQuery(callback: any) {
-  const userId = callback.from.id;
-  const data = callback.data;
-  const chatId = callback.message.chat.id;
-  const messageId = callback.message.message_id;
-  const username = callback.from.username ?? "";
-
-  // Answer the callback to remove loading
-  await fetch(`${TELEGRAM_API}/answerCallbackQuery`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ callback_query_id: callback.id }),
-  });
-
-  if (data === "check_join") {
-    let joinedAll = true;
-    const notJoined: string[] = [];
-    for (const ch of channels) {
-      const joined = await checkMembership(userId, ch.username);
-      if (!joined) {
-        joinedAll = false;
-        notJoined.push(ch.name);
-      }
-    }
-    if (joinedAll) {
-      if (vpnCodes.length > 0) {
-        const code = vpnCodes.shift()!;
-        await saveData(CODES_FILE, vpnCodes);
-        await sendMessage(chatId, `VPN kodyňyz: ${code}`);
-      } else {
-        await sendMessage(chatId, "Häzirlikde VPN kody ýok.");
+    if (subscribed) {
+      await sendMessage(chatId, "🎉 Thank you for subscribing to all channels! You can now use the bot.");
+      const file = await kv.get(["current_file_id"]);
+      if (file.value) {
+        await sendDocument(chatId, file.value as string);
       }
     } else {
-      await sendMessage(chatId, `Siz henüz agza bolmadyňyz kanallara: ${notJoined.join(", ")}`);
+      await sendMessage(chatId, "⚠️ You need to subscribe to all channels first! Click the button below after subscribing.", {
+        inline_keyboard: [
+          [{ text: "Check Subscription ✅", callback_data: "check_sub" }],
+          ...CHANNELS.map(channel => [{ text: `Join ${channel}`, url: `https://t.me/${channel.replace("@","")}` }])
+        ]
+      });
     }
-    return;
   }
 
-  // Most callbacks are admin-only, check now
-  if (!admins.includes(username)) return;
+  // Handle inline button click
+  if (data === "check_sub" && messageId) {
+    const subscribed = await isSubscribed(userId);
+    const textToSend = subscribed
+      ? "🎉 You are subscribed to all channels! You can now use the bot."
+      : "⚠️ You are not subscribed to all channels. Please join them first!";
 
-  // Admin callbacks
-  if (data === "broadcast") {
-    await sendMessage(chatId, "Ryssylka üçin ID ýa-da 'toplu' ýazyň:");
-    states.set(userId, "broadcast_type");
-  } else if (data === "manage_channels") {
-    const instr = "Kanal goşmak üçin: add_channel Name https://t.me/username\nKanal aýyrmak üçin: remove_channel Name";
-    await sendMessage(chatId, instr);
-  } else if (data === "add_admin") {
-    await sendMessage(chatId, "Täze admin ID-sini ýazyň:");
-    states.set(userId, "add_admin");
-  } else if (data === "add_vpn_code") {
-    await sendMessage(chatId, "VPN kody goşmak üçin kod ýazyň ýa-da faýl ugrat:");
-    states.set(userId, "add_vpn_code");
+    await fetch(`${TELEGRAM_API}/editMessageText`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+        text: textToSend,
+        reply_markup: subscribed ? undefined : {
+          inline_keyboard: [
+            [{ text: "Check Subscription ✅", callback_data: "check_sub" }],
+            ...CHANNELS.map(channel => [{ text: `Join ${channel}`, url: `https://t.me/${channel.replace("@","")}` }])
+          ]
+        }
+      })
+    });
+
+    if (subscribed) {
+      const file = await kv.get(["current_file_id"]);
+      if (file.value) {
+        await sendDocument(chatId, file.value as string);
+      }
+    }
+
+    // Answer callback query to remove loading
+    await fetch(`${TELEGRAM_API}/answerCallbackQuery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        callback_query_id: callbackQuery.id
+      })
+    });
   }
-}
 
-// -------------------- Main update handler --------------------
-async function handleUpdate(update: any) {
-  if (update.message) {
-    await handleMessage(update.message);
-  } else if (update.callback_query) {
-    await handleCallbackQuery(update.callback_query);
-  }
-}
-
-// -------------------- Server / Webhook --------------------
-serve(async (req: Request) => {
-  try {
-    const url = new URL(req.url);
-    if (url.pathname !== SECRET_PATH) return new Response("Not found", { status: 404 });
-    if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
-
-    const update = await req.json();
-    await handleUpdate(update);
-
-    return new Response("OK");
-  } catch (e) {
-    console.error("server error", e);
-    return new Response("Error", { status: 500 });
-  }
+  return new Response("OK", { status: 200 });
 });
