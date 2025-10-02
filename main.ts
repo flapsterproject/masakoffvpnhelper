@@ -126,7 +126,7 @@ serve(async (req: Request) => {
         const title = await getChannelTitle(channel);
         channelButtons.push([{ text: `${title} 🚀`, url: `https://t.me/${channel}` }]);
       }
-      await sendMessage(chatId, "⚠️ Ilki ähli kanallara agza bolmaly! Agza bolanyňyzdan soň aşakdaky düwmä basyň. 📢", {
+      await sendMessage(chatId, "⚠️ Ilki ähli kanallara agza bolmaly! Agza bolanyňyzdan soň iň aşakdaky düwmä basyň. 📢", {
         inline_keyboard: [
           ...channelButtons,
           [{ text: "AGZA BOLDUM✅", callback_data: "check_sub" }]
