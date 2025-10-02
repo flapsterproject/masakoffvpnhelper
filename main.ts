@@ -77,11 +77,11 @@ serve(async (req: Request) => {
   // Handle admin /changefile command
   if (text === "/changefile") {
     if (username !== ADMIN_USERNAME) {
-      await sendMessage(chatId, "⚠️ You are not authorized to use this command.");
+      await sendMessage(chatId, "⚠️ Bu buýruga rugsadyňyz ýok! 🚫");
       return new Response("OK", { status: 200 });
     }
     await kv.set(["admin_state", chatId], "waiting_for_file");
-    await sendMessage(chatId, "Please send me the file.");
+    await sendMessage(chatId, "Maňa faýly iberiň. 📁");
     return new Response("OK", { status: 200 });
   }
 
@@ -92,7 +92,7 @@ serve(async (req: Request) => {
       const fileId = document.file_id;
       await kv.set(["current_file_id"], fileId);
       await kv.delete(["admin_state", chatId]);
-      await sendMessage(chatId, "File updated successfully.");
+      await sendMessage(chatId, "Faýl üstünlikli täzelendi! ✅📄");
       return new Response("OK", { status: 200 });
     }
   }
@@ -102,16 +102,16 @@ serve(async (req: Request) => {
     const subscribed = await isSubscribed(userId);
 
     if (subscribed) {
-      await sendMessage(chatId, "🎉 Thank you for subscribing to all channels! You can now use the bot.");
+      await sendMessage(chatId, "🎉 Ähli kanallara abuna bolanyňyz üçin sag boluň! Indi boty ulanyp bilersiňiz. 🤖👍");
       const file = await kv.get(["current_file_id"]);
       if (file.value) {
         await sendDocument(chatId, file.value as string);
       }
     } else {
-      await sendMessage(chatId, "⚠️ You need to subscribe to all channels first! Click the button below after subscribing.", {
+      await sendMessage(chatId, "⚠️ Ilki ähli kanallara abuna bolmaly! Abuna boldan soň aşakdaky düwmä basyň. 📢", {
         inline_keyboard: [
-          [{ text: "Check Subscription ✅", callback_data: "check_sub" }],
-          ...CHANNELS.map(channel => [{ text: `Join ${channel}`, url: `https://t.me/${channel.replace("@","")}` }])
+          [{ text: "Abunalygy barla ✅", callback_data: "check_sub" }],
+          ...CHANNELS.map(channel => [{ text: `Goşul ${channel} 🚀`, url: `https://t.me/${channel.replace("@","")}` }])
         ]
       });
     }
@@ -121,8 +121,8 @@ serve(async (req: Request) => {
   if (data === "check_sub" && messageId) {
     const subscribed = await isSubscribed(userId);
     const textToSend = subscribed
-      ? "🎉 You are subscribed to all channels! You can now use the bot."
-      : "⚠️ You are not subscribed to all channels. Please join them first!";
+      ? "🎉 Ähli kanallara abuna bolduňyz! Indi boty ulanyp bilersiňiz. 🤖👍"
+      : "⚠️ Ähli kanallara abuna däl. Ilki olara goşulyň! 📢";
 
     await fetch(`${TELEGRAM_API}/editMessageText`, {
       method: "POST",
@@ -133,8 +133,8 @@ serve(async (req: Request) => {
         text: textToSend,
         reply_markup: subscribed ? undefined : {
           inline_keyboard: [
-            [{ text: "Check Subscription ✅", callback_data: "check_sub" }],
-            ...CHANNELS.map(channel => [{ text: `Join ${channel}`, url: `https://t.me/${channel.replace("@","")}` }])
+            [{ text: "Abunalygy barla ✅", callback_data: "check_sub" }],
+            ...CHANNELS.map(channel => [{ text: `Goşul ${channel} 🚀`, url: `https://t.me/${channel.replace("@","")}` }])
           ]
         }
       })
