@@ -1,19 +1,20 @@
 // main.ts
-// Telegram Media Downloader Bot (Deno)
-// Features: If user sends YouTube, TikTok or Instagram link, the bot will get the direct video URL and send it as video.
-// Uses ytdl_core for YouTube, @tobyg74/tiktok-api-dl for TikTok, instagram-url-direct for Instagram.
+// Telegram YouTube Downloader Bot (Deno)
+// Features: If user sends YouTube link, the bot will use RapidAPI to download the video and send it.
+// Uses yt-video-audio-downloader-api.p.rapidapi.com for YouTube downloads.
 // Requires Deno 2.0+ for npm support.
-// Notes: Requires BOT_TOKEN env var. Deploy as webhook at SECRET_PATH.
+// Notes: Requires BOT_TOKEN and RAPIDAPI_KEY env vars. Deploy as webhook at SECRET_PATH.
+// The RapidAPI key from the photo should be set as RAPIDAPI_KEY env var.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import * as ytdl from "https://deno.land/x/ytdl_core/mod.ts";
-import Tiktok from "npm:@tobyg74/tiktok-api-dl";
-import instagramGetUrl from "npm:instagram-url-direct";
 
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
+const RAPIDAPI_KEY = Deno.env.get("RAPIDAPI_KEY")!; // Use the key from the photo: e9cc022650msh59ce424efce38cbp118626jsn2e5efa086...
+if (!RAPIDAPI_KEY) throw new Error("RAPIDAPI_KEY env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper"; // make sure webhook path matches
+const RAPIDAPI_HOST = "yt-video-audio-downloader-api.p.rapidapi.com";
 
 // -------------------- Telegram helpers --------------------
 async function sendMessage(chatId: string | number, text: string, options: any = {}): Promise<number | null> {
@@ -50,48 +51,42 @@ async function sendVideo(chatId: string | number, videoUrl: string, options: any
 }
 
 // -------------------- Extractors --------------------
-async function extractYouTubeUrl(text: string): Promise<string | undefined> {
-  let videoId: string | null = null;
-  if (text.includes("youtube.com")) {
-    const params = new URLSearchParams(new URL(text).search);
-    videoId = params.get("v");
-  } else if (text.includes("youtu.be")) {
-    videoId = new URL(text).pathname.slice(1);
-  }
-  if (!videoId) return undefined;
-
+async function getYouTubeDirectUrl(text: string): Promise<string | undefined> {
   try {
-    const info = await ytdl.getBasicInfo(videoId);
-    const format = ytdl.chooseFormat(info.formats, { quality: "highest", filter: "audioandvideo" });
-    return format.url;
+    // Initiate download
+    const initRes = await fetch(`https://${RAPIDAPI_HOST}/download`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-RapidAPI-Key": RAPIDAPI_KEY,
+        "X-RapidAPI-Host": RAPIDAPI_HOST,
+      },
+      body: JSON.stringify({ url: text, format: "mp4", quality: 720 }),
+    });
+    if (!initRes.ok) return undefined;
+    const initData = await initRes.json();
+    const jobId = initData.jobId;
+    if (!jobId) return undefined;
+
+    // Poll status until completed
+    while (true) {
+      await new Promise((r) => setTimeout(r, 5000)); // Wait 5 seconds
+      const statusRes = await fetch(`https://${RAPIDAPI_HOST}/status/${jobId}`, {
+        method: "GET",
+        headers: {
+          "X-RapidAPI-Key": RAPIDAPI_KEY,
+          "X-RapidAPI-Host": RAPIDAPI_HOST,
+        },
+      });
+      if (!statusRes.ok) return undefined;
+      const statusData = await statusRes.json();
+      if (statusData.status === "completed" && statusData.filename) {
+        return `https://${RAPIDAPI_HOST}/file/${jobId}/${statusData.filename}`;
+      }
+      if (statusData.status === "error") return undefined;
+    }
   } catch (e) {
     console.error("YouTube extract error", e);
-    return undefined;
-  }
-}
-
-async function extractTikTokUrl(text: string): Promise<string | undefined> {
-  try {
-    const result = await Tiktok.Downloader(text, { version: "v1" });
-    if (result.status === "success" && result.result) {
-      // Assuming result.result.video is the direct URL; adjust based on actual structure
-      // From docs, it might be result.result.video[0] or something; you may need to console.log to check
-      return result.result.video; // Replace with correct path if different
-    }
-  } catch (e) {
-    console.error("TikTok extract error", e);
-    return undefined;
-  }
-}
-
-async function extractInstagramUrl(text: string): Promise<string | undefined> {
-  try {
-    const result = await instagramGetUrl(text);
-    if (result.url_list && result.url_list.length > 0) {
-      return result.url_list[0];
-    }
-  } catch (e) {
-    console.error("Instagram extract error", e);
     return undefined;
   }
 }
@@ -105,7 +100,7 @@ async function handleUpdate(update: any) {
     const chatId = String(msg.chat.id);
 
     if (text.startsWith("/start") || text.startsWith("/help")) {
-      const helpText = `🌟 Welcome to Media Downloader Bot!\n\nSend me a link from YouTube, TikTok, or Instagram, and I'll download and send the video back to you. 📹\n\nSupported platforms:\n- YouTube (youtube.com or youtu.be)\n- TikTok (tiktok.com)\n- Instagram (instagram.com)\n\nJust paste the link!`;
+      const helpText = `🌟 Welcome to YouTube Downloader Bot!\n\nSend me a YouTube link, and I'll download and send the video back to you. 📹\n\nSupported platform:\n- YouTube (youtube.com or youtu.be)\n\nJust paste the link!`;
       await sendMessage(chatId, helpText);
       return;
     }
@@ -127,13 +122,9 @@ async function handleUpdate(update: any) {
 
     try {
       if (host.includes("youtube.com") || host === "youtu.be") {
-        directUrl = await extractYouTubeUrl(text);
-      } else if (host.includes("tiktok.com")) {
-        directUrl = await extractTikTokUrl(text);
-      } else if (host.includes("instagram.com")) {
-        directUrl = await extractInstagramUrl(text);
+        directUrl = await getYouTubeDirectUrl(text);
       } else {
-        await sendMessage(chatId, "Unsupported link. Supported: YouTube, TikTok, Instagram.");
+        await sendMessage(chatId, "Unsupported link. Supported: YouTube.");
         return;
       }
     } catch (e) {
