@@ -114,6 +114,50 @@ serve(async (req: Request) => {
     return new Response("OK", { status: 200 });
   }
 
+  // Handle admin /deletechannel command
+  if (text?.startsWith("/deletechannel")) {
+    if (username !== ADMIN_USERNAME) {
+      await sendMessage(chatId, "⚠️ Bu buýruga rugsadyňyz ýok! 🚫");
+      return new Response("OK", { status: 200 });
+    }
+    const parts = text.split(" ");
+    if (parts.length < 2) {
+      await sendMessage(chatId, "Kanallary aýyrmak üçin /deletechannel @channel_name ýaly iberiň. 📢");
+      return new Response("OK", { status: 200 });
+    }
+    const delChannel = parts[1];
+    if (!delChannel.startsWith("@")) {
+      await sendMessage(chatId, "Kanal ady @ bilen başlamaly. 📢");
+      return new Response("OK", { status: 200 });
+    }
+    let channels = await getChannels();
+    const index = channels.indexOf(delChannel);
+    if (index === -1) {
+      await sendMessage(chatId, "Bu kanal sanawda ýok! 📢");
+      return new Response("OK", { status: 200 });
+    }
+    channels.splice(index, 1);
+    await kv.set(["channels"], channels);
+    await sendMessage(chatId, `Kanal ${delChannel} üstünlikli aýyryldy! ✅📢`);
+    return new Response("OK", { status: 200 });
+  }
+
+  // Handle admin /listchannels command
+  if (text === "/listchannels") {
+    if (username !== ADMIN_USERNAME) {
+      await sendMessage(chatId, "⚠️ Bu buýruga rugsadyňyz ýok! 🚫");
+      return new Response("OK", { status: 200 });
+    }
+    const channels = await getChannels();
+    if (channels.length === 0) {
+      await sendMessage(chatId, "Sanawda kanal ýok. 📢");
+    } else {
+      const channelList = channels.join("\n");
+      await sendMessage(chatId, `Häzirki kanallar:\n${channelList} 📢`);
+    }
+    return new Response("OK", { status: 200 });
+  }
+
   // Handle admin /changefile command
   if (text === "/changefile") {
     if (username !== ADMIN_USERNAME) {
