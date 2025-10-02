@@ -9,6 +9,19 @@ const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 const CHANNELS = ["FlapsterMiner", "MasakoffVpns"]; // your channels
 const ADMIN_USERNAME = "Masakoff"; // admin username without @
 
+async function getChannelTitle(channel: string): Promise<string> {
+  try {
+    const res = await fetch(`${TELEGRAM_API}/getChat?chat_id=@${channel}`);
+    const data = await res.json();
+    if (data.ok) {
+      return data.result.title;
+    }
+  } catch (e) {
+    console.error(e);
+  }
+  return channel; // fallback to username if fetch fails
+}
+
 serve(async (req: Request) => {
   const { pathname } = new URL(req.url);
   if (pathname !== SECRET_PATH) {
@@ -61,7 +74,7 @@ serve(async (req: Request) => {
   async function isSubscribed(uid: number) {
     for (const channel of CHANNELS) {
       try {
-        const res = await fetch(`${TELEGRAM_API}/getChatMember?chat_id=${channel}&user_id=${uid}`);
+        const res = await fetch(`${TELEGRAM_API}/getChatMember?chat_id=@${channel}&user_id=${uid}`);
         const data = await res.json();
         if (!data.ok) return false;
         const status = data.result.status;
@@ -108,10 +121,15 @@ serve(async (req: Request) => {
         await sendDocument(chatId, file.value as string);
       }
     } else {
+      const channelButtons = [];
+      for (const channel of CHANNELS) {
+        const title = await getChannelTitle(channel);
+        channelButtons.push([{ text: `${title} 🚀`, url: `https://t.me/${channel}` }]);
+      }
       await sendMessage(chatId, "⚠️ Ilki ähli kanallara agza bolmaly! Agza bolanyňyzdan soň aşakdaky düwmä basyň. 📢", {
         inline_keyboard: [
           [{ text: "AGZA BOLDUM✅", callback_data: "check_sub" }],
-          ...CHANNELS.map(channel => [{ text: ` ${channel} 🚀`, url: `https://t.me/${channel.replace("@","")}` }])
+          ...channelButtons
         ]
       });
     }
@@ -124,6 +142,21 @@ serve(async (req: Request) => {
       ? "🎉 Siz ähli kanallara agza bolduňyz! Vpnden lezzet alyň. 🤖👍"
       : "⚠️ Siz ähli kanallara agza däl. Ilki olara goşulyň! 📢";
 
+    let replyMarkup;
+    if (!subscribed) {
+      const channelButtons = [];
+      for (const channel of CHANNELS) {
+        const title = await getChannelTitle(channel);
+        channelButtons.push([{ text: `${title} 🚀`, url: `https://t.me/${channel}` }]);
+      }
+      replyMarkup = {
+        inline_keyboard: [
+          [{ text: "AGZA BOLDUM✅", callback_data: "check_sub" }],
+          ...channelButtons
+        ]
+      };
+    }
+
     await fetch(`${TELEGRAM_API}/editMessageText`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -131,12 +164,7 @@ serve(async (req: Request) => {
         chat_id: chatId,
         message_id: messageId,
         text: textToSend,
-        reply_markup: subscribed ? undefined : {
-          inline_keyboard: [
-            [{ text: "AGZA BOLDUM✅", callback_data: "check_sub" }],
-            ...CHANNELS.map(channel => [{ text: ` ${channel} 🚀`, url: `https://t.me/${channel.replace("@","")}` }])
-          ]
-        }
+        reply_markup: replyMarkup
       })
     });
 
