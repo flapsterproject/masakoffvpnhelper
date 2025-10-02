@@ -3,15 +3,10 @@ import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 const kv = await Deno.openKv();
 
-const initialChannels = ["@FlapsterMiner"];
-const ch = await kv.get(["channels"]);
-if (!ch.value) {
-  await kv.set(["channels"], initialChannels);
-}
-
 const TOKEN = Deno.env.get("BOT_TOKEN");
 const SECRET_PATH = "/masakoffvpnhelper"; // change this
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
+const CHANNELS = ["@FlapsterMiner"]; // your channels
 const ADMIN_USERNAME = "Masakoff"; // admin username without @
 
 serve(async (req: Request) => {
@@ -36,12 +31,6 @@ serve(async (req: Request) => {
   const document = message?.document;
 
   if (!chatId || !userId) return new Response("No chat ID or user ID", { status: 200 });
-
-  // Function to get channels from KV
-  async function getChannels(): Promise<string[]> {
-    const res = await kv.get(["channels"]);
-    return res.value as string[] || [];
-  }
 
   // Function to send message
   async function sendMessage(cid: number, msg: string, markup?: any) {
@@ -70,9 +59,7 @@ serve(async (req: Request) => {
 
   // Function to check subscription
   async function isSubscribed(uid: number) {
-    const channels = await getChannels();
-    if (channels.length === 0) return true; // If no channels, consider subscribed
-    for (const channel of channels) {
+    for (const channel of CHANNELS) {
       try {
         const res = await fetch(`${TELEGRAM_API}/getChatMember?chat_id=${channel}&user_id=${uid}`);
         const data = await res.json();
@@ -85,77 +72,6 @@ serve(async (req: Request) => {
       }
     }
     return true;
-  }
-
-  // Handle admin /addchannel command
-  if (text?.startsWith("/addchannel")) {
-    if (username !== ADMIN_USERNAME) {
-      await sendMessage(chatId, "⚠️ Bu buýruga rugsadyňyz ýok! 🚫");
-      return new Response("OK", { status: 200 });
-    }
-    const parts = text.split(" ");
-    if (parts.length < 2) {
-      await sendMessage(chatId, "Kanallary goşmak üçin /addchannel @channel_name ýaly iberiň. 📢");
-      return new Response("OK", { status: 200 });
-    }
-    const newChannel = parts[1];
-    if (!newChannel.startsWith("@")) {
-      await sendMessage(chatId, "Kanal ady @ bilen başlamaly. 📢");
-      return new Response("OK", { status: 200 });
-    }
-    let channels = await getChannels();
-    if (channels.includes(newChannel)) {
-      await sendMessage(chatId, "Bu kanal eýýäm goşuldy! 📢");
-      return new Response("OK", { status: 200 });
-    }
-    channels.push(newChannel);
-    await kv.set(["channels"], channels);
-    await sendMessage(chatId, `Kanal ${newChannel} üstünlikli goşuldy! ✅📢`);
-    return new Response("OK", { status: 200 });
-  }
-
-  // Handle admin /deletechannel command
-  if (text?.startsWith("/deletechannel")) {
-    if (username !== ADMIN_USERNAME) {
-      await sendMessage(chatId, "⚠️ Bu buýruga rugsadyňyz ýok! 🚫");
-      return new Response("OK", { status: 200 });
-    }
-    const parts = text.split(" ");
-    if (parts.length < 2) {
-      await sendMessage(chatId, "Kanallary aýyrmak üçin /deletechannel @channel_name ýaly iberiň. 📢");
-      return new Response("OK", { status: 200 });
-    }
-    const delChannel = parts[1];
-    if (!delChannel.startsWith("@")) {
-      await sendMessage(chatId, "Kanal ady @ bilen başlamaly. 📢");
-      return new Response("OK", { status: 200 });
-    }
-    let channels = await getChannels();
-    const index = channels.indexOf(delChannel);
-    if (index === -1) {
-      await sendMessage(chatId, "Bu kanal sanawda ýok! 📢");
-      return new Response("OK", { status: 200 });
-    }
-    channels.splice(index, 1);
-    await kv.set(["channels"], channels);
-    await sendMessage(chatId, `Kanal ${delChannel} üstünlikli aýyryldy! ✅📢`);
-    return new Response("OK", { status: 200 });
-  }
-
-  // Handle admin /listchannels command
-  if (text === "/listchannels") {
-    if (username !== ADMIN_USERNAME) {
-      await sendMessage(chatId, "⚠️ Bu buýruga rugsadyňyz ýok! 🚫");
-      return new Response("OK", { status: 200 });
-    }
-    const channels = await getChannels();
-    if (channels.length === 0) {
-      await sendMessage(chatId, "Sanawda kanal ýok. 📢");
-    } else {
-      const channelList = channels.join("\n");
-      await sendMessage(chatId, `Häzirki kanallar:\n${channelList} 📢`);
-    }
-    return new Response("OK", { status: 200 });
   }
 
   // Handle admin /changefile command
@@ -184,7 +100,6 @@ serve(async (req: Request) => {
   // Handle /start command
   if (text?.startsWith("/start")) {
     const subscribed = await isSubscribed(userId);
-    const channels = await getChannels();
 
     if (subscribed) {
       await sendMessage(chatId, "🎉 Ähli kanallara agza bolanyňyz üçin sag boluň! Vpnden Lezzet alyň. 🤖👍");
@@ -196,7 +111,7 @@ serve(async (req: Request) => {
       await sendMessage(chatId, "⚠️ Ilki ähli kanallara agza bolmaly! Agza bolanyňyzdan soň aşakdaky düwmä basyň. 📢", {
         inline_keyboard: [
           [{ text: "AGZA BOLDUM✅", callback_data: "check_sub" }],
-          ...channels.map(channel => [{ text: ` ${channel} 🚀`, url: `https://t.me/${channel.replace("@","")}` }])
+          ...CHANNELS.map(channel => [{ text: ` ${channel} 🚀`, url: `https://t.me/${channel.replace("@","")}` }])
         ]
       });
     }
@@ -205,7 +120,6 @@ serve(async (req: Request) => {
   // Handle inline button click
   if (data === "check_sub" && messageId) {
     const subscribed = await isSubscribed(userId);
-    const channels = await getChannels();
     const textToSend = subscribed
       ? "🎉 Siz ähli kanallara agza bolduňyz! Vpnden Lezzet alyň. 🤖👍"
       : "⚠️ Siz ähli kanallara agza däl. Ilki olara goşulyň! 📢";
@@ -220,7 +134,7 @@ serve(async (req: Request) => {
         reply_markup: subscribed ? undefined : {
           inline_keyboard: [
             [{ text: "AGZA BOLDUM✅", callback_data: "check_sub" }],
-            ...channels.map(channel => [{ text: ` ${channel} 🚀`, url: `https://t.me/${channel.replace("@","")}` }])
+            ...CHANNELS.map(channel => [{ text: ` ${channel} 🚀`, url: `https://t.me/${channel.replace("@","")}` }])
           ]
         }
       })
