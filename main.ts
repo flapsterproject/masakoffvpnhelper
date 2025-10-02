@@ -1,26 +1,28 @@
 // main.ts
-// Telegram YouTube Downloader Bot (Deno)
-// Features: If user sends YouTube link, the bot will use RapidAPI to download the video and send it.
-// Uses yt-video-audio-downloader-api.p.rapidapi.com for YouTube downloads.
-// Requires Deno 2.0+ for npm support.
-// Notes: Requires BOT_TOKEN and RAPIDAPI_KEY env vars. Deploy as webhook at SECRET_PATH.
-// The RapidAPI key from the photo should be set as RAPIDAPI_KEY env var.
+// Telegram Grok Chatbot (Deno)
+// Features: A strong AI chatbot using xAI's Grok API to answer any question, potentially better than ChatGPT.
+// Uses xAI API for chat completions (model: grok-4).
+// Requires Deno 2.0+.
+// Notes: Requires BOT_TOKEN and XAI_API_KEY env vars. Deploy as webhook at SECRET_PATH.
+// To get XAI_API_KEY and details on the API, visit https://x.ai/api.
+// Note: Grok-4 access may require a specific subscription; check the API docs for availability.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
-const RAPIDAPI_KEY = Deno.env.get("RAPIDAPI_KEY")!; // Use the key from the photo: e9cc022650msh59ce424efce38cbp118626jsn2e5efa086...
-if (!RAPIDAPI_KEY) throw new Error("RAPIDAPI_KEY env var is required");
-const API = `https://api.telegram.org/bot${TOKEN}`;
+const XAI_API_KEY = Deno.env.get("XAI_API_KEY")!;
+if (!XAI_API_KEY) throw new Error("XAI_API_KEY env var is required");
+const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
+const XAI_API = "https://api.x.ai/v1/chat/completions";
 const SECRET_PATH = "/masakoffvpnhelper"; // make sure webhook path matches
-const RAPIDAPI_HOST = "yt-video-audio-downloader-api.p.rapidapi.com";
+const MODEL = "grok-4"; // Use grok-4 for strong responses; adjust if needed
 
 // -------------------- Telegram helpers --------------------
 async function sendMessage(chatId: string | number, text: string, options: any = {}): Promise<number | null> {
   try {
     const body: any = { chat_id: chatId, text, ...options };
-    const res = await fetch(`${API}/sendMessage`, {
+    const res = await fetch(`${TELEGRAM_API}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -33,66 +35,34 @@ async function sendMessage(chatId: string | number, text: string, options: any =
   }
 }
 
-async function sendVideo(chatId: string | number, videoUrl: string, options: any = {}) {
+// -------------------- AI Response --------------------
+async function getAIResponse(prompt: string): Promise<string | undefined> {
   try {
-    const body: any = { chat_id: chatId, video: videoUrl, ...options };
-    const res = await fetch(`${API}/sendVideo`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (!data.ok) {
-      console.error("sendVideo failed:", data.description);
-    }
-  } catch (e) {
-    console.error("sendVideo error", e);
-  }
-}
-
-// -------------------- Extractors --------------------
-async function getYouTubeDirectUrl(text: string): Promise<string | undefined> {
-  try {
-    // Initiate download
-    const initRes = await fetch(`https://${RAPIDAPI_HOST}/v1/download`, {
+    const body = {
+      model: MODEL,
+      messages: [
+        { role: "system", content: "You are Grok, a helpful and maximally truthful AI built by xAI." },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.7,
+      max_tokens: 1024,
+    };
+    const res = await fetch(XAI_API, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-RapidAPI-Key": RAPIDAPI_KEY,
-        "X-RapidAPI-Host": RAPIDAPI_HOST,
+        "Authorization": `Bearer ${XAI_API_KEY}`,
       },
-      body: JSON.stringify({ url: text, format: "mp4", quality: 720 }),
+      body: JSON.stringify(body),
     });
-    if (!initRes.ok) {
-      console.error("Init response not ok:", await initRes.text());
+    if (!res.ok) {
+      console.error("xAI API response not ok:", await res.text());
       return undefined;
     }
-    const initData = await initRes.json();
-    const jobId = initData.jobId;
-    if (!jobId) return undefined;
-
-    // Poll status until completed
-    while (true) {
-      await new Promise((r) => setTimeout(r, 5000)); // Wait 5 seconds
-      const statusRes = await fetch(`https://${RAPIDAPI_HOST}/status/${jobId}`, {
-        method: "GET",
-        headers: {
-          "X-RapidAPI-Key": RAPIDAPI_KEY,
-          "X-RapidAPI-Host": RAPIDAPI_HOST,
-        },
-      });
-      if (!statusRes.ok) {
-        console.error("Status response not ok:", await statusRes.text());
-        return undefined;
-      }
-      const statusData = await statusRes.json();
-      if (statusData.status === "completed" && statusData.filename) {
-        return `https://${RAPIDAPI_HOST}/file/${jobId}/${statusData.filename}`;
-      }
-      if (statusData.status === "error") return undefined;
-    }
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content?.trim();
   } catch (e) {
-    console.error("YouTube extract error", e);
+    console.error("xAI API error", e);
     return undefined;
   }
 }
@@ -106,46 +76,30 @@ async function handleUpdate(update: any) {
     const chatId = String(msg.chat.id);
 
     if (text.startsWith("/start") || text.startsWith("/help")) {
-      const helpText = `🌟 Welcome to YouTube Downloader Bot!\n\nSend me a YouTube link, and I'll download and send the video back to you. 📹\n\nSupported platform:\n- YouTube (youtube.com or youtu.be)\n\nJust paste the link!`;
+      const helpText = `🌟 Welcome to Grok Chatbot!\n\nI'm powered by xAI's Grok API to answer any question you have, aiming to be even better than ChatGPT. 🤖\n\nJust send me a message with your question or topic, and I'll respond!`;
       await sendMessage(chatId, helpText);
       return;
     }
 
     if (!text) return;
 
-    let urlObj;
+    await sendMessage(chatId, "Thinking...");
+
+    let aiResponse: string | undefined;
     try {
-      urlObj = new URL(text);
-    } catch {
-      await sendMessage(chatId, "Please send a valid URL.");
-      return;
-    }
-
-    const host = urlObj.hostname.toLowerCase();
-    let directUrl: string | undefined;
-
-    await sendMessage(chatId, "Processing your link...");
-
-    try {
-      if (host.includes("youtube.com") || host === "youtu.be") {
-        directUrl = await getYouTubeDirectUrl(text);
-      } else {
-        await sendMessage(chatId, "Unsupported link. Supported: YouTube.");
-        return;
-      }
+      aiResponse = await getAIResponse(text);
     } catch (e) {
-      console.error("Extract error", e);
-      await sendMessage(chatId, "Failed to get the video. Try another link or later.");
+      console.error("AI response error", e);
+      await sendMessage(chatId, "Failed to get a response. Try again later.");
       return;
     }
 
-    if (!directUrl) {
-      await sendMessage(chatId, "Could not retrieve video URL.");
+    if (!aiResponse) {
+      await sendMessage(chatId, "Could not generate a response.");
       return;
     }
 
-    await sendVideo(chatId, directUrl);
-    await sendMessage(chatId, "Video sent! Enjoy.");
+    await sendMessage(chatId, aiResponse);
   }
 }
 
