@@ -111,7 +111,7 @@ serve(async (req: Request) => {
       await sendMessage(chatId, "⚠️ Ilki ähli kanallara agza bolmaly! Agza bolanyňyzdan soň aşakdaky düwmä basyň. 📢", {
         inline_keyboard: [
           [{ text: "AGZA BOLDUM✅", callback_data: "check_sub" }],
-          ...CHANNELS.map(channel => [{ text: `Goşul ${channel} 🚀`, url: `https://t.me/${channel.replace("@","")}` }])
+          ...CHANNELS.map(channel => [{ text: `${channel} 🚀`, url: `https://t.me/${channel.replace("","")}` }])
         ]
       });
     }
