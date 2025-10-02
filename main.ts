@@ -1,22 +1,21 @@
 // main.ts
-// Telegram Grok Chatbot (Deno)
-// Features: A strong AI chatbot using xAI's Grok API to answer any question, potentially better than ChatGPT.
-// Uses xAI API for chat completions (model: grok-4).
+// Telegram DeepSeek Chatbot (Deno)
+// Features: A strong AI chatbot using DeepSeek's free API to answer any question.
+// Uses DeepSeek API for chat completions (model: deepseek-chat).
 // Requires Deno 2.0+.
-// Notes: Requires BOT_TOKEN and XAI_API_KEY env vars. Deploy as webhook at SECRET_PATH.
-// To get XAI_API_KEY and details on the API, visit https://x.ai/api.
-// Note: Grok-4 access may require a specific subscription; check the API docs for availability.
+// Notes: Requires BOT_TOKEN and DEEPSEEK_API_KEY env vars. Deploy as webhook at SECRET_PATH.
+// To get a free DeepSeek API key, sign up at https://platform.deepseek.com/ and generate one in your dashboard. The free tier has daily usage limits (e.g., tokens per day). Check https://platform.deepseek.com/docs for details.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
-const XAI_API_KEY = Deno.env.get("XAI_API_KEY")!;
-if (!XAI_API_KEY) throw new Error("XAI_API_KEY env var is required");
+const DEEPSEEK_API_KEY = Deno.env.get("DEEPSEEK_API_KEY")!;
+if (!DEEPSEEK_API_KEY) throw new Error("DEEPSEEK_API_KEY env var is required");
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
-const XAI_API = "https://api.x.ai/v1/chat/completions";
+const DEEPSEEK_API = "https://api.deepseek.com/v1/chat/completions";
 const SECRET_PATH = "/masakoffvpnhelper"; // make sure webhook path matches
-const MODEL = "grok-4"; // Use grok-4 for strong responses; adjust if needed
+const MODEL = "deepseek-chat"; // Use deepseek-chat for general queries; adjust if needed (e.g., deepseek-coder for code-related)
 
 // -------------------- Telegram helpers --------------------
 async function sendMessage(chatId: string | number, text: string, options: any = {}): Promise<number | null> {
@@ -41,28 +40,28 @@ async function getAIResponse(prompt: string): Promise<string | undefined> {
     const body = {
       model: MODEL,
       messages: [
-        { role: "system", content: "You are Grok, a helpful and maximally truthful AI built by xAI." },
+        { role: "system", content: "You are a helpful and intelligent AI assistant." },
         { role: "user", content: prompt },
       ],
       temperature: 0.7,
       max_tokens: 1024,
     };
-    const res = await fetch(XAI_API, {
+    const res = await fetch(DEEPSEEK_API, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${XAI_API_KEY}`,
+        "Authorization": `Bearer ${DEEPSEEK_API_KEY}`,
       },
       body: JSON.stringify(body),
     });
     if (!res.ok) {
-      console.error("xAI API response not ok:", await res.text());
+      console.error("DeepSeek API response not ok:", await res.text());
       return undefined;
     }
     const data = await res.json();
     return data.choices?.[0]?.message?.content?.trim();
   } catch (e) {
-    console.error("xAI API error", e);
+    console.error("DeepSeek API error", e);
     return undefined;
   }
 }
@@ -76,7 +75,7 @@ async function handleUpdate(update: any) {
     const chatId = String(msg.chat.id);
 
     if (text.startsWith("/start") || text.startsWith("/help")) {
-      const helpText = `🌟 Welcome to Grok Chatbot!\n\nI'm powered by xAI's Grok API to answer any question you have, aiming to be even better than ChatGPT. 🤖\n\nJust send me a message with your question or topic, and I'll respond!`;
+      const helpText = `🌟 Welcome to DeepSeek Chatbot!\n\nI'm powered by DeepSeek's API to answer any question you have. 🤖\n\nJust send me a message with your question or topic, and I'll respond! Note: This uses the free tier, so there may be usage limits.`;
       await sendMessage(chatId, helpText);
       return;
     }
