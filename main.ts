@@ -102,13 +102,13 @@ serve(async (req: Request) => {
     const subscribed = await isSubscribed(userId);
 
     if (subscribed) {
-      await sendMessage(chatId, "🎉 Ähli kanallara abuna bolanyňyz üçin sag boluň! Indi boty ulanyp bilersiňiz. 🤖👍");
+      await sendMessage(chatId, "🎉 Ähli kanallara agza bolanyňyz üçin sag boluň! Vpnden Lezzet alyň. 🤖👍");
       const file = await kv.get(["current_file_id"]);
       if (file.value) {
         await sendDocument(chatId, file.value as string);
       }
     } else {
-      await sendMessage(chatId, "⚠️ Ilki ähli kanallara abuna bolmaly! Abuna boldan soň aşakdaky düwmä basyň. 📢", {
+      await sendMessage(chatId, "⚠️ Ilki ähli kanallara agza bolmaly! Agza bolanyňyzdan soň aşakdaky düwmä basyň. 📢", {
         inline_keyboard: [
           [{ text: "Abunalygy barla ✅", callback_data: "check_sub" }],
           ...CHANNELS.map(channel => [{ text: `Goşul ${channel} 🚀`, url: `https://t.me/${channel.replace("@","")}` }])
@@ -121,8 +121,8 @@ serve(async (req: Request) => {
   if (data === "check_sub" && messageId) {
     const subscribed = await isSubscribed(userId);
     const textToSend = subscribed
-      ? "🎉 Ähli kanallara abuna bolduňyz! Indi boty ulanyp bilersiňiz. 🤖👍"
-      : "⚠️ Ähli kanallara abuna däl. Ilki olara goşulyň! 📢";
+      ? "🎉 Siz ähli kanallara agza bolduňyz! Vpnden Lezzet alyň. 🤖👍"
+      : "⚠️ Siz ähli kanallara agza däl. Ilki olara goşulyň! 📢";
 
     await fetch(`${TELEGRAM_API}/editMessageText`, {
       method: "POST",
@@ -133,8 +133,8 @@ serve(async (req: Request) => {
         text: textToSend,
         reply_markup: subscribed ? undefined : {
           inline_keyboard: [
-            [{ text: "Abunalygy barla ✅", callback_data: "check_sub" }],
-            ...CHANNELS.map(channel => [{ text: `Goşul ${channel} 🚀`, url: `https://t.me/${channel.replace("@","")}` }])
+            [{ text: "AGZA BOLDUM✅", callback_data: "check_sub" }],
+            ...CHANNELS.map(channel => [{ text: ` ${channel} 🚀`, url: `https://t.me/${channel.replace("","")}` }])
           ]
         }
       })
