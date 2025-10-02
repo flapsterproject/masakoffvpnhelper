@@ -6,7 +6,7 @@ const kv = await Deno.openKv();
 const TOKEN = Deno.env.get("BOT_TOKEN");
 const SECRET_PATH = "/masakoffvpnhelper"; // change this
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
-const CHANNELS = ["@FlapsterMiner"]; // your channels
+const CHANNELS = ["@FlapsterMiner", "@MasakoffVpns"]; // your channels
 const ADMIN_USERNAME = "Masakoff"; // admin username without @
 
 serve(async (req: Request) => {
@@ -102,7 +102,7 @@ serve(async (req: Request) => {
     const subscribed = await isSubscribed(userId);
 
     if (subscribed) {
-      await sendMessage(chatId, "🎉 Ähli kanallara agza bolanyňyz üçin sag boluň! Vpnden Lezzet alyň. 🤖👍");
+      await sendMessage(chatId, "🎉 Ähli kanallara agza bolanyňyz üçin sag boluň! Vpnden lezzet alyň. 🤖👍");
       const file = await kv.get(["current_file_id"]);
       if (file.value) {
         await sendDocument(chatId, file.value as string);
@@ -121,7 +121,7 @@ serve(async (req: Request) => {
   if (data === "check_sub" && messageId) {
     const subscribed = await isSubscribed(userId);
     const textToSend = subscribed
-      ? "🎉 Siz ähli kanallara agza bolduňyz! Vpnden Lezzet alyň. 🤖👍"
+      ? "🎉 Siz ähli kanallara agza bolduňyz! Vpnden lezzet alyň. 🤖👍"
       : "⚠️ Siz ähli kanallara agza däl. Ilki olara goşulyň! 📢";
 
     await fetch(`${TELEGRAM_API}/editMessageText`, {
