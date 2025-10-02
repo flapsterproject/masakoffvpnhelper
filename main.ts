@@ -14,7 +14,7 @@ const RAPIDAPI_KEY = Deno.env.get("RAPIDAPI_KEY")!; // Use the key from the phot
 if (!RAPIDAPI_KEY) throw new Error("RAPIDAPI_KEY env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper"; // make sure webhook path matches
-const RAPIDAPI_HOST = "youtube-to-mp4.p.rapidapi.com";
+const RAPIDAPI_HOST = "yt-video-audio-downloader-api.p.rapidapi.com";
 
 // -------------------- Telegram helpers --------------------
 async function sendMessage(chatId: string | number, text: string, options: any = {}): Promise<number | null> {
@@ -54,7 +54,7 @@ async function sendVideo(chatId: string | number, videoUrl: string, options: any
 async function getYouTubeDirectUrl(text: string): Promise<string | undefined> {
   try {
     // Initiate download
-    const initRes = await fetch(`https://${RAPIDAPI_HOST}/download`, {
+    const initRes = await fetch(`https://${RAPIDAPI_HOST}/v1/download`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -63,7 +63,10 @@ async function getYouTubeDirectUrl(text: string): Promise<string | undefined> {
       },
       body: JSON.stringify({ url: text, format: "mp4", quality: 720 }),
     });
-    if (!initRes.ok) return undefined;
+    if (!initRes.ok) {
+      console.error("Init response not ok:", await initRes.text());
+      return undefined;
+    }
     const initData = await initRes.json();
     const jobId = initData.jobId;
     if (!jobId) return undefined;
@@ -78,7 +81,10 @@ async function getYouTubeDirectUrl(text: string): Promise<string | undefined> {
           "X-RapidAPI-Host": RAPIDAPI_HOST,
         },
       });
-      if (!statusRes.ok) return undefined;
+      if (!statusRes.ok) {
+        console.error("Status response not ok:", await statusRes.text());
+        return undefined;
+      }
       const statusData = await statusRes.json();
       if (statusData.status === "completed" && statusData.filename) {
         return `https://${RAPIDAPI_HOST}/file/${jobId}/${statusData.filename}`;
