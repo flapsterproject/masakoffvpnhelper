@@ -133,10 +133,6 @@ async function handleMessage(msg: any) {
       return;
     } else if (state === "add_vpn_code") {
       if (msg.document) {
-        if (!msg.document.mime_type?.startsWith("text/")) {
-          await sendMessage(chatId, "Diňe tekst faýllary kabul edilýär.");
-          return;
-        }
         try {
           const fileId = msg.document.file_id;
           const fileRes = await fetch(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
