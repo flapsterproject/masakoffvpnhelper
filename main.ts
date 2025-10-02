@@ -133,6 +133,10 @@ async function handleMessage(msg: any) {
       return;
     } else if (state === "add_vpn_code") {
       if (msg.document) {
+        if (!msg.document.mime_type?.startsWith("text/")) {
+          await sendMessage(chatId, "Diňe tekst faýllary kabul edilýär.");
+          return;
+        }
         try {
           const fileId = msg.document.file_id;
           const fileRes = await fetch(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
@@ -140,19 +144,26 @@ async function handleMessage(msg: any) {
           if (!fileData.ok) throw new Error();
           const filePath = fileData.result.file_path;
           const downloadRes = await fetch(`https://api.telegram.org/file/bot${TOKEN}/${filePath}`);
+          if (!downloadRes.ok) throw new Error("Download failed");
           const fileText = await downloadRes.text();
           const codes = fileText.split("\n").map((c: string) => c.trim()).filter((c: string) => c);
+          if (codes.length === 0) {
+            await sendMessage(chatId, "Faýlda kod ýok.");
+            return;
+          }
           vpnCodes.push(...codes);
           await saveData(CODES_FILE, vpnCodes);
-          await sendMessage(chatId, "Faýldan kodlar goşuldy.");
+          await sendMessage(chatId, `Faýldan ${codes.length} kod goşuldy.`);
         } catch (e) {
           console.error("File download error", e);
           await sendMessage(chatId, "Faýly ýüklemekde ýalňyşlyk.");
         }
-      } else {
+      } else if (text) {
         vpnCodes.push(text);
         await saveData(CODES_FILE, vpnCodes);
         await sendMessage(chatId, "Kod goşuldy.");
+      } else {
+        await sendMessage(chatId, "Kod ýa-da faýl ugradyň!");
       }
       return;
     }
