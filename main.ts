@@ -14,7 +14,7 @@ const RAPIDAPI_KEY = Deno.env.get("RAPIDAPI_KEY")!; // Use the key from the phot
 if (!RAPIDAPI_KEY) throw new Error("RAPIDAPI_KEY env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper"; // make sure webhook path matches
-const RAPIDAPI_HOST = "yt-video-audio-downloader-api.p.rapidapi.com";
+const RAPIDAPI_HOST = "youtube-to-mp4.p.rapidapi.com";
 
 // -------------------- Telegram helpers --------------------
 async function sendMessage(chatId: string | number, text: string, options: any = {}): Promise<number | null> {
