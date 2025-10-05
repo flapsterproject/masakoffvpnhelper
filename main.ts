@@ -1,878 +1,555 @@
+// main.ts
+// Convix Ads Bot (Deno) - Smart Growth & Monetization for Telegram Channels
+// Features: Main menu with inline buttons, grow channel, earn from channel, AI ad generator,
+// my account, support, admin panel (hidden), referral system, currency (Convix Credits - CX)
+// Multi-language support (English, Russian, Turkmen) - defaults to English
+// Anti-fake detection (simulated), auto-notifications (simulated)
+// Uses Deno KV for storage, webhook setup
+//
+// Notes: Requires BOT_TOKEN env var and Deno KV. Deploy as webhook at SECRET_PATH.
+
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
+const TOKEN = Deno.env.get("BOT_TOKEN")!;
+if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
+const API = `https://api.telegram.org/bot${TOKEN}`;
+const SECRET_PATH = "/masakoffvpnhelper"; // make sure webhook path matches
+const BOT_USERNAME = "MasakoffVpnHelperBot"; // Adjust to your bot's username
+
+// Deno KV
 const kv = await Deno.openKv();
-const TELEGRAM_API = `https://api.telegram.org/bot${Deno.env.get("BOT_TOKEN")}`;
-const API_SERVER_URL = "http://213.176.72.67:6000";
-const CLIENT_API_KEY = "tmshop-aiapi_250f0b6b206ea27203a6c00ba61039cf60f0a5a788fbf02f700bf80e8c704b78";
-const SECRET_PATH = "/masakoffvpnhelper";
-const CHANNELS = ["MasakoffVpns"];
-const ADMIN_USERNAME = "Masakoff";
 
-interface UserData {
-  api_key: string;
-  chat_history: Array<{ role: string; content: string }>;
-  image_settings?: { model: string; awaiting_prompt: boolean; has_image?: boolean; file_id?: string };
-  video_settings?: { model: string; awaiting_prompt: boolean };
+const ADMIN_USERNAME = "Masakoff"; // without @, replace with actual
+
+// Languages
+const LANGUAGES = ["en", "ru", "tk"] as const;
+type Language = typeof LANGUAGES[number];
+
+// runtime storages (temporary, for quick access)
+const searchTimeouts: Record<string, number> = {};
+
+// State helpers using KV
+async function getUserState(userId: string): Promise<{ step: string; data?: any } | null> {
+  const res = await kv.get<{ step: string; data?: any }>(["states", "user", userId]);
+  return res.value;
 }
 
-const user_data: { [user_id: number]: UserData } = {};
+async function setUserState(userId: string, state: { step: string; data?: any } | null) {
+  if (state) {
+    await kv.set(["states", "user", userId], state);
+  } else {
+    await kv.delete(["states", "user", userId]);
+  }
+}
 
-const IMAGE_STATUSES = [
-  "🖼️ Generating image... 🎨[▓▓▓▓▓▓░░░░] 50%",
-  "🖼️ Generating image... ✨[▓▓▓▓▓▓▓▓░░] 70%",
-  "🖼️ Generating image... 🌈[▓▓▓▓▓▓▓▓▓▓] 100%",
-  "🎨 Creating masterpiece... 🎭[▓▓▓▓▓░░░░░] 40%",
-  "🎨 Creating masterpiece... ✨[▓▓▓▓▓▓▓▓▓▓] 100%",
-  "✨ Surrealism forming... 🦄[▓▓▓▓▓▓░░░░] 60%",
-  "✨ Surrealism forming... 🌟[▓▓▓▓▓▓▓▓▓▓] 100%",
-  "🖌️ Preparing palette... 🎨[▓▓▓▓░░░░░░] 30%",
-  "🖌️ Preparing palette... 🌈[▓▓▓▓▓▓▓▓▓▓] 100%",
-  "🌟 Collecting stardust... ✨[▓▓▓▓▓▓▓░░░] 70%",
-  "🌟 Collecting stardust... 💫[▓▓▓▓▓▓▓▓▓▓] 100%"
-];
-
-const VIDEO_STATUSES = [
-  "🎬 Generating video... 🎞️[▓▓▓▓░░░░░░] 30%",
-  "🎬 Generating video... 🎭[▓▓▓▓▓▓▓░░░] 70%",
-  "🎬 Generating video... ✨[▓▓▓▓▓▓▓▓▓▓] 100%",
-  "🎞️ Compiling frames... 🎬[▓▓▓▓▓░░░░░] 50%",
-  "🎞️ Compiling frames... 🌟[▓▓▓▓▓▓▓▓▓▓] 100%",
-  "🎭 Preparing spectacle... 🎪[▓▓▓▓▓▓░░░░] 60%",
-  "🎭 Preparing spectacle... ✨[▓▓▓▓▓▓▓▓▓▓] 100%",
-  "🌟 Gathering stars... 🌠[▓▓▓▓▓▓▓░░░] 70%",
-  "🌟 Gathering stars... 🎥[▓▓▓▓▓▓▓▓▓▓] 100%",
-  "🚀 Creating cosmic video... 🌌[▓▓▓▓▓▓▓▓░░] 80%",
-  "🚀 Creating cosmic video... ✨[▓▓▓▓▓▓▓▓▓▓] 100%"
-];
-
-async function getChannelTitle(channel: string): Promise<string> {
+// -------------------- Telegram helpers --------------------
+async function sendMessage(chatId: string | number, text: string, options: any = {}): Promise<number | null> {
   try {
-    const res = await fetch(`${TELEGRAM_API}/getChat?chat_id=@${channel}`);
+    const body: any = { chat_id: chatId, text, ...options };
+    const res = await fetch(`${API}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
     const data = await res.json();
-    if (data.ok) {
-      return data.result.title;
-    }
+    return data.result?.message_id ?? null;
   } catch (e) {
-    console.error(e);
+    console.error("sendMessage error", e);
+    return null;
   }
-  return channel;
 }
 
-async function sendMessage(cid: number, msg: string, markup?: any) {
-  await fetch(`${TELEGRAM_API}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: cid,
-      text: msg,
-      parse_mode: "HTML",
-      reply_markup: markup
-    })
-  });
-}
-
-async function sendPhoto(cid: number, photoUrl: string, caption: string) {
-  const response = await fetch(photoUrl);
-  const arrayBuffer = await response.arrayBuffer();
-  const blob = new Blob([arrayBuffer]);
-  const formData = new FormData();
-  formData.append("chat_id", cid.toString());
-  formData.append("photo", blob, "generated_image.png");
-  formData.append("caption", caption);
-  formData.append("parse_mode", "HTML");
-
-  await fetch(`${TELEGRAM_API}/sendPhoto`, {
-    method: "POST",
-    body: formData
-  });
-}
-
-async function sendVideo(cid: number, videoUrl: string, caption: string) {
-  const response = await fetch(videoUrl);
-  const arrayBuffer = await response.arrayBuffer();
-  const blob = new Blob([arrayBuffer]);
-  const formData = new FormData();
-  formData.append("chat_id", cid.toString());
-  formData.append("video", blob, "generated_video.mp4");
-  formData.append("caption", caption);
-  formData.append("parse_mode", "HTML");
-
-  await fetch(`${TELEGRAM_API}/sendVideo`, {
-    method: "POST",
-    body: formData
-  });
-}
-
-async function isSubscribed(uid: number): Promise<boolean> {
-  for (const channel of CHANNELS) {
-    try {
-      const res = await fetch(`${TELEGRAM_API}/getChatMember?chat_id=@${channel}&user_id=${uid}`);
-      const data = await res.json();
-      if (!data.ok) return false;
-      const status = data.result.status;
-      if (status === "left" || status === "kicked") return false;
-    } catch (e) {
-      console.error(e);
-      return false;
-    }
-  }
-  return true;
-}
-
-async function verifyApiKey(apiKey: string): Promise<any> {
+async function editMessageText(chatId: string | number, messageId: number, text: string, options: any = {}) {
   try {
-    const res = await fetch(`${API_SERVER_URL}/api/v1/verify`, {
-      headers: { "Authorization": `Bearer ${apiKey}` }
-    });
-    return await res.json();
-  } catch (e) {
-    console.error(e);
-    return { ok: false, error: String(e) };
-  }
-}
-
-async function sendChatMessage(userId: number, message: string): Promise<any> {
-  try {
-    if (!user_data[userId]) {
-      user_data[userId] = { api_key: CLIENT_API_KEY, chat_history: [] };
-    }
-    user_data[userId].chat_history.push({ role: "user", content: message });
-
-    const response = await fetch(`${API_SERVER_URL}/api/v1/chat/completions`, {
+    const body = { chat_id: chatId, message_id: messageId, text, ...options };
+    await fetch(`${API}/editMessageText`, {
       method: "POST",
-      headers: {
-        "Authorization": `Bearer ${user_data[userId].api_key}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "anthropic/claude-3-haiku",
-        messages: user_data[userId].chat_history,
-        temperature: 0.7,
-        max_tokens: 1000
-      })
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     });
-
-    const data = await response.json();
-    if (response.status === 200 || response.status === 201) {
-      let content = "";
-      if (data.choices?.[0]?.message?.content) {
-        content = data.choices[0].message.content;
-      } else if (data.content) {
-        content = data.content;
-      }
-
-      if (content) {
-        user_data[userId].chat_history.push({ role: "assistant", content });
-        if (user_data[userId].chat_history.length > 10) {
-          user_data[userId].chat_history = user_data[userId].chat_history.slice(-10);
-        }
-        return { success: true, response: content };
-      }
-    }
-    return { success: false, error: `API error: ${response.status}` };
   } catch (e) {
-    return { success: false, error: String(e) };
+    console.warn("editMessageText failed", e?.message ?? e);
   }
 }
 
-async function generateImage(userId: number, prompt: string, model: string, size: string, imageUrl?: string): Promise<any> {
+async function answerCallbackQuery(id: string, text = "", showAlert = false) {
   try {
-    const data: any = { model, prompt, size };
-    if (imageUrl) data.filesUrl = [imageUrl];
-
-    const response = await fetch(`${API_SERVER_URL}/api/v1/images/generations`, {
+    await fetch(`${API}/answerCallbackQuery`, {
       method: "POST",
-      headers: {
-        "Authorization": `Bearer ${user_data[userId].api_key}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(data)
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ callback_query_id: id, text, show_alert: showAlert }),
     });
-
-    if (response.status === 200 || response.status === 201) {
-      const result = await response.json();
-      const requestId = result.requestId || result.id;
-      if (requestId) {
-        const imageUrl = await checkImageStatus(requestId, userId);
-        if (imageUrl) {
-          return { success: true, image_url: imageUrl, request_id: requestId };
-        }
-      }
-    }
-    return { success: false, error: "Image generation failed" };
   } catch (e) {
-    return { success: false, error: String(e) };
+    console.warn("answerCallbackQuery failed", e?.message ?? e);
   }
 }
 
-async function generateVideo(userId: number, prompt: string, model: string): Promise<any> {
+// -------------------- Profile helpers --------------------
+type Profile = {
+  id: string;
+  username?: string;
+  displayName: string;
+  language: Language;
+  balance: number; // CX credits
+  earnings: number;
+  channels: string[]; // connected channels
+  campaigns: any[]; // active campaigns
+  referrals: number;
+  referralLink: string;
+  lastActive: number;
+};
+
+function getDisplayName(p: Profile) {
+  if (p.username) return `@${p.username}`;
+  return p.displayName && p.displayName !== "" ? p.displayName : `ID:${p.id}`;
+}
+
+async function initProfile(userId: string, username?: string, displayName?: string, language: Language = "en"): Promise<{ profile: Profile; isNew: boolean }> {
+  const key = ["profiles", userId];
+  const res = await kv.get(key);
+  if (!res.value) {
+    const referralLink = `https://t.me/${BOT_USERNAME}?start=ref_${userId}`;
+    const profile: Profile = {
+      id: userId,
+      username,
+      displayName: displayName || `ID:${userId}`,
+      language,
+      balance: 0,
+      earnings: 0,
+      channels: [],
+      campaigns: [],
+      referrals: 0,
+      referralLink,
+      lastActive: Date.now(),
+    };
+    await kv.set(key, profile);
+    return { profile, isNew: true };
+  } else {
+    const existing = res.value as Profile;
+    let changed = false;
+    if (username && username !== existing.username) {
+      existing.username = username;
+      changed = true;
+    }
+    if (displayName && displayName !== existing.displayName) {
+      existing.displayName = displayName;
+      changed = true;
+    }
+    existing.lastActive = Date.now();
+    await kv.set(key, existing);
+    return { profile: existing, isNew: false };
+  }
+}
+
+async function getProfile(userId: string): Promise<Profile | null> {
+  const res = await kv.get(["profiles", userId]);
+  return (res.value as Profile) ?? null;
+}
+
+async function updateProfile(userId: string, delta: Partial<Profile>) {
+  const existing = (await getProfile(userId)) || (await initProfile(userId)).profile;
+  const newProfile: Profile = {
+    ...existing,
+    ...delta,
+    balance: Math.max(0, (existing.balance || 0) + (delta.balance ?? 0)),
+    earnings: Math.max(0, (existing.earnings || 0) + (delta.earnings ?? 0)),
+    referrals: (existing.referrals || 0) + (delta.referrals ?? 0),
+    lastActive: Date.now(),
+  };
+  await kv.set(["profiles", userId], newProfile);
+  return newProfile;
+}
+
+// -------------------- Translation helper --------------------
+function t(lang: Language, key: string): string {
+  const translations: Record<string, Record<Language, string>> = {
+    welcome: { en: "Welcome to Convix Ads! 🚀\nYour intelligent tool for growing and monetizing Telegram channels.\nSelect an option below 👇", ru: "Добро пожаловать в Convix Ads! 🚀\nВаш умный инструмент для роста и монетизации Telegram-каналов.\nВыберите опцию ниже 👇", tk: "Convix Ads-a hoş geldiňiz! 🚀\nTelegram kanallaryny ösdürmek we pul gazanmak üçin akylly guram.\nAşakdaky saýlawyň birini saýlaň 👇" },
+    // Add more translations as needed
+    back: { en: "🔙 Back to Main", ru: "🔙 Назад в главное", tk: "🔙 Esasy menýu" },
+    // ... etc for all texts
+  };
+  return translations[key]?.[lang] || key;
+}
+
+// -------------------- Menu helpers --------------------
+function getMainMenu(lang: Language): any {
+  return {
+    inline_keyboard: [
+      [{ text: "📈 Grow My Channel", callback_data: "menu:grow" }],
+      [{ text: "💰 Earn From My Channel", callback_data: "menu:earn" }],
+      [{ text: "👤 My Account", callback_data: "menu:account" }],
+      [{ text: "🧠 AI Ad Generator", callback_data: "menu:ai" }],
+      [{ text: "💬 Support", callback_data: "menu:support" }],
+    ]
+  };
+}
+
+function getGrowMenu(lang: Language): any {
+  return {
+    inline_keyboard: [
+      [{ text: "➕ Add Channel", callback_data: "grow:add_channel" }],
+      [{ text: "💵 Deposit Balance", callback_data: "grow:deposit" }],
+      [{ text: "🎯 Create Promotion", callback_data: "grow:create_promo" }],
+      [{ text: "📊 My Campaigns", callback_data: "grow:campaigns" }],
+      [{ text: "🧮 Pricing Info", callback_data: "grow:pricing" }],
+      [{ text: t(lang, "back"), callback_data: "menu:main" }],
+    ]
+  };
+}
+
+function getEarnMenu(lang: Language): any {
+  return {
+    inline_keyboard: [
+      [{ text: "➕ Connect My Channel", callback_data: "earn:connect" }],
+      [{ text: "💸 Withdraw Earnings", callback_data: "earn:withdraw" }],
+      [{ text: "📅 Earnings History", callback_data: "earn:history" }],
+      [{ text: "⚙️ Ad Settings", callback_data: "earn:settings" }],
+      [{ text: t(lang, "back"), callback_data: "menu:main" }],
+    ]
+  };
+}
+
+function getAccountMenu(lang: Language): any {
+  return {
+    inline_keyboard: [
+      [{ text: "💰 My Balance", callback_data: "account:balance" }],
+      [{ text: "🎯 Active Campaigns", callback_data: "account:campaigns" }],
+      [{ text: "📊 Channel Stats", callback_data: "account:stats" }],
+      [{ text: "👥 Referrals", callback_data: "account:referrals" }],
+      [{ text: "⚙️ Settings", callback_data: "account:settings" }],
+      [{ text: t(lang, "back"), callback_data: "menu:main" }],
+    ]
+  };
+}
+
+function getAIMenu(lang: Language): any {
+  return {
+    inline_keyboard: [
+      [{ text: "📝 Generate Ad Post", callback_data: "ai:generate" }],
+      [{ text: "✏️ Rewrite Existing Post", callback_data: "ai:rewrite" }],
+      [{ text: "🧩 Add Hashtags", callback_data: "ai:hashtags" }],
+      [{ text: "💾 Save Template", callback_data: "ai:save" }],
+      [{ text: t(lang, "back"), callback_data: "menu:main" }],
+    ]
+  };
+}
+
+function getSupportMenu(lang: Language): any {
+  return {
+    inline_keyboard: [
+      [{ text: "📚 FAQ", callback_data: "support:faq" }],
+      [{ text: "🧑‍💻 Contact Admin", callback_data: "support:contact" }],
+      [{ text: "🏦 Payment & Payout Rules", callback_data: "support:rules" }],
+      [{ text: "🔒 Privacy Policy", callback_data: "support:privacy" }],
+      [{ text: t(lang, "back"), callback_data: "menu:main" }],
+    ]
+  };
+}
+
+function getAdminMenu(lang: Language): any {
+  return {
+    inline_keyboard: [
+      [{ text: "🧾 Manage Channels", callback_data: "admin:channels" }],
+      [{ text: "💰 Manage Balances", callback_data: "admin:balances" }],
+      [{ text: "📤 Approve Payouts", callback_data: "admin:payouts" }],
+      [{ text: "📢 Broadcast Message", callback_data: "admin:broadcast" }],
+      [{ text: "🎁 Create Promo Code", callback_data: "admin:promo" }],
+      [{ text: "🪙 Manage Coin Prices", callback_data: "admin:prices" }],
+      [{ text: "📊 System Stats", callback_data: "admin:stats" }],
+    ]
+  };
+}
+
+// -------------------- Callback handler --------------------
+async function handleCallback(cb: any) {
+  const fromId = String(cb.from.id);
+  const data = cb.data ?? null;
+  const callbackId = cb.id;
+  const username = cb.from.username;
+  const lang = (await getProfile(fromId))?.language || "en";
+
+  if (!data) {
+    await answerCallbackQuery(callbackId);
+    return;
+  }
+
+  if (data.startsWith("menu:")) {
+    const menu = data.split(":")[1];
+    let text: string;
+    let keyboard: any;
+    if (menu === "main") {
+      text = t(lang, "welcome");
+      keyboard = getMainMenu(lang);
+    } else if (menu === "grow") {
+      text = "Promote your channel to real users who are interested in your content.";
+      keyboard = getGrowMenu(lang);
+    } else if (menu === "earn") {
+      text = "Monetize your channel by allowing Convix Ads to promote other channels automatically.";
+      keyboard = getEarnMenu(lang);
+    } else if (menu === "account") {
+      text = "View your profile, balance, stats, and referral bonuses.";
+      keyboard = getAccountMenu(lang);
+    } else if (menu === "ai") {
+      text = "Create professional, catchy ad posts in one click using AI.";
+      keyboard = getAIMenu(lang);
+    } else if (menu === "support") {
+      text = "Support & Info";
+      keyboard = getSupportMenu(lang);
+    } else {
+      await answerCallbackQuery(callbackId, "Unknown menu.");
+      return;
+    }
+    const msgId = cb.message.message_id;
+    await editMessageText(fromId, msgId, text, { reply_markup: keyboard });
+    await answerCallbackQuery(callbackId);
+    return;
+  }
+
+  // Handle sub-actions
+  if (data.startsWith("grow:")) {
+    const action = data.split(":")[1];
+    // Implement actions like add_channel, deposit, etc.
+    // For example, set state and prompt user
+    if (action === "add_channel") {
+      await setUserState(fromId, { step: "add_channel" });
+      await sendMessage(fromId, "Please enter your channel username or ID to add.");
+    } else if (action === "deposit") {
+      await setUserState(fromId, { step: "deposit" });
+      await sendMessage(fromId, "Enter amount to deposit (in CX).");
+    } // ... add more
+    await answerCallbackQuery(callbackId);
+    return;
+  }
+
+  if (data.startsWith("earn:")) {
+    const action = data.split(":")[1];
+    if (action === "connect") {
+      await setUserState(fromId, { step: "connect_channel" });
+      await sendMessage(fromId, "Enter your channel to connect for earning.");
+    } else if (action === "withdraw") {
+      const profile = await getProfile(fromId);
+      if (profile && profile.earnings >= 1) { // min withdrawal example
+        await setUserState(fromId, { step: "withdraw" });
+        await sendMessage(fromId, "Enter withdrawal amount.");
+      } else {
+        await answerCallbackQuery(callbackId, "Insufficient earnings.", true);
+      }
+    } // ... add more
+    await answerCallbackQuery(callbackId);
+    return;
+  }
+
+  if (data.startsWith("account:")) {
+    const action = data.split(":")[1];
+    const profile = await getProfile(fromId);
+    if (!profile) {
+      await answerCallbackQuery(callbackId, "Profile not found.", true);
+      return;
+    }
+    if (action === "balance") {
+      await sendMessage(fromId, `Your balance: ${profile.balance} CX`);
+    } else if (action === "referrals") {
+      await sendMessage(fromId, `Referrals: ${profile.referrals}\nLink: ${profile.referralLink}`);
+    } // ... add more
+    await answerCallbackQuery(callbackId);
+    return;
+  }
+
+  if (data.startsWith("ai:")) {
+    const action = data.split(":")[1];
+    if (action === "generate") {
+      await setUserState(fromId, { step: "ai_generate" });
+      await sendMessage(fromId, "Describe the ad you want to generate.");
+    } // ... add more (simulate AI with fixed output)
+    await answerCallbackQuery(callbackId);
+    return;
+  }
+
+  if (data.startsWith("support:")) {
+    const action = data.split(":")[1];
+    if (action === "faq") {
+      await sendMessage(fromId, "FAQ: ..."); // Add content
+    } // ... add more
+    await answerCallbackQuery(callbackId);
+    return;
+  }
+
+  if (data.startsWith("admin:")) {
+    if (username !== ADMIN_USERNAME) {
+      await answerCallbackQuery(callbackId, "Access denied.", true);
+      return;
+    }
+    const action = data.split(":")[1];
+    if (action === "stats") {
+      // Implement stats
+      let userCount = 0;
+      for await (const _ of kv.list({ prefix: ["profiles"] })) userCount++;
+      await sendMessage(fromId, `Users: ${userCount}`);
+    } // ... add more admin actions
+    await answerCallbackQuery(callbackId);
+    return;
+  }
+
+  await answerCallbackQuery(callbackId);
+}
+
+// -------------------- Command handler --------------------
+async function handleCommand(fromId: string, username: string | undefined, displayName: string, text: string, isNew: boolean, lang: Language) {
+  if (text.startsWith("/start")) {
+    let referrerId: string | undefined;
+    const parts = text.split(" ");
+    if (parts.length > 1 && parts[1].startsWith("ref_")) {
+      referrerId = parts[1].slice(4);
+    }
+    if (referrerId && isNew && referrerId !== fromId) {
+      const refProfile = await getProfile(referrerId);
+      if (refProfile) {
+        await updateProfile(referrerId, { balance: refProfile.balance + 0.1, referrals: 1 }); // 10% bonus example
+        await sendMessage(referrerId, "New referral! +10% bonus.");
+        await sendMessage(fromId, `Referred by ID:${referrerId}.`);
+      }
+    }
+    const welcome = t(lang, "welcome");
+    await sendMessage(fromId, welcome, { reply_markup: getMainMenu(lang) });
+    return;
+  }
+
+  if (text.startsWith("/grow")) {
+    await sendMessage(fromId, "Grow My Channel", { reply_markup: getGrowMenu(lang) });
+    return;
+  }
+
+  if (text.startsWith("/earn")) {
+    await sendMessage(fromId, "Earn From My Channel", { reply_markup: getEarnMenu(lang) });
+    return;
+  }
+
+  if (text.startsWith("/balance")) {
+    const profile = await getProfile(fromId);
+    await sendMessage(fromId, `Balance: ${profile?.balance ?? 0} CX`);
+    return;
+  }
+
+  if (text.startsWith("/withdraw")) {
+    // Similar to earn:withdraw
+    await sendMessage(fromId, "Enter withdrawal amount.");
+    await setUserState(fromId, { step: "withdraw" });
+    return;
+  }
+
+  if (text.startsWith("/help")) {
+    await sendMessage(fromId, "Help: Use menus or commands like /grow, /earn.");
+    return;
+  }
+
+  if (text.startsWith("/admin")) {
+    if (username !== ADMIN_USERNAME) {
+      await sendMessage(fromId, "Access denied.");
+      return;
+    }
+    await sendMessage(fromId, "Admin Panel", { reply_markup: getAdminMenu(lang) });
+    return;
+  }
+
+  await sendMessage(fromId, "Unknown command. Use /help.");
+}
+
+// -------------------- Text input handler --------------------
+async function handleTextInput(fromId: string, text: string, username: string | undefined, displayName: string) {
+  const state = await getUserState(fromId);
+  if (!state) return;
+
+  // Handle states
+  if (state.step === "add_channel") {
+    // Simulate adding channel
+    const profile = await getProfile(fromId);
+    if (profile) {
+      profile.channels.push(text);
+      await updateProfile(fromId, { channels: profile.channels });
+      await sendMessage(fromId, `Channel ${text} added.`);
+    }
+    await setUserState(fromId, null);
+  } else if (state.step === "deposit") {
+    // Simulate deposit
+    const amount = parseFloat(text);
+    if (!isNaN(amount) && amount > 0) {
+      await updateProfile(fromId, { balance: amount });
+      await sendMessage(fromId, `${amount} CX deposited.`);
+    } else {
+      await sendMessage(fromId, "Invalid amount.");
+    }
+    await setUserState(fromId, null);
+  } else if (state.step === "withdraw") {
+    // Simulate withdrawal
+    const amount = parseFloat(text);
+    const profile = await getProfile(fromId);
+    if (profile && amount > 0 && amount <= profile.earnings) {
+      await updateProfile(fromId, { earnings: -amount });
+      await sendMessage(fromId, `${amount} withdrawn.`);
+      // Notify admin
+      const adminProfile = await getProfileByUsername(ADMIN_USERNAME);
+      if (adminProfile) await sendMessage(adminProfile.id, `Withdrawal request: ${amount} from ${fromId}`);
+    } else {
+      await sendMessage(fromId, "Invalid or insufficient amount.");
+    }
+    await setUserState(fromId, null);
+  } else if (state.step === "ai_generate") {
+    // Simulate AI
+    const example = "🚀 Join TechNow — the #1 place for daily AI news!\n🎯 Learn faster, stay ahead, and connect with innovators.\n🔗 [Join Now]";
+    await sendMessage(fromId, `Generated ad:\n${example}`);
+    await setUserState(fromId, null);
+  } // ... add more states
+
+}
+
+async function getProfileByUsername(username: string): Promise<Profile | null> {
   try {
-    const response = await fetch(`${API_SERVER_URL}/api/v1/videos/generations`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${user_data[userId].api_key}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ model, prompt })
-    });
-
-    if (response.status === 200 || response.status === 201) {
-      const result = await response.json();
-      const requestId = result.requestId || result.id;
-      if (requestId) {
-        const videoUrl = await checkVideoStatus(requestId, userId);
-        if (videoUrl) {
-          return { success: true, video_url: videoUrl, request_id: requestId };
-        }
-      }
+    for await (const entry of kv.list({ prefix: ["profiles"] })) {
+      const profile = entry.value as Profile;
+      if (profile?.username === username) return profile;
     }
-    return { success: false, error: "Video generation failed" };
   } catch (e) {
-    return { success: false, error: String(e) };
-  }
-}
-
-async function checkImageStatus(requestId: string, userId: number): Promise<string | null> {
-  for (let i = 0; i < 30; i++) {
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    try {
-      const response = await fetch(`${API_SERVER_URL}/api/v1/images/${requestId}`, {
-        headers: { "Authorization": `Bearer ${user_data[userId].api_key}` }
-      });
-      if (response.status === 200) {
-        const result = await response.json();
-        if (result.status === "COMPLETED") return result.url;
-        if (result.status === "FAILED") return null;
-      }
-    } catch (e) {
-      console.error(e);
-    }
+    console.error("getProfileByUsername error", e);
   }
   return null;
 }
 
-async function checkVideoStatus(requestId: string, userId: number): Promise<string | null> {
-  for (let i = 0; i < 60; i++) {
-    await new Promise(resolve => setTimeout(resolve, 5000));
-    try {
-      const response = await fetch(`${API_SERVER_URL}/api/v1/videos/${requestId}`, {
-        headers: { "Authorization": `Bearer ${user_data[userId].api_key}` }
-      });
-      if (response.status === 200) {
-        const result = await response.json();
-        if (result.status === "COMPLETED") return result.url;
-        if (result.status === "FAILED") return null;
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  }
-  return null;
-}
-
+// -------------------- Server / Webhook --------------------
 serve(async (req: Request) => {
-  const { pathname } = new URL(req.url);
-  if (pathname !== SECRET_PATH) {
-    return new Response("Bot is running.", { status: 200 });
-  }
+  try {
+    const url = new URL(req.url);
+    if (url.pathname !== SECRET_PATH) return new Response("Not found", { status: 404 });
+    if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
-  if (req.method !== "POST") {
-    return new Response("Method Not Allowed", { status: 405 });
-  }
+    const update = await req.json();
 
-  const update = await req.json();
-  const message = update.message;
-  const callbackQuery = update.callback_query;
-  const chatId = message?.chat?.id || callbackQuery?.message?.chat?.id;
-  const userId = message?.from?.id || callbackQuery?.from?.id;
-  const text = message?.text;
-  const data = callbackQuery?.data;
-  const messageId = callbackQuery?.message?.message_id;
-  const username = message?.from?.username;
-  const photo = message?.photo;
+    // handle normal messages
+    if (update.message) {
+      const msg = update.message;
+      if (msg.chat.type !== "private") return new Response("OK");
+      const from = msg.from;
+      const text = (msg.text || "").trim();
+      const fromId = String(from.id);
+      const username = from.username;
+      const displayName = from.first_name || from.username || fromId;
+      const lang = from.language_code === "ru" ? "ru" : from.language_code === "tk" ? "tk" : "en";
 
-  if (!chatId || !userId) return new Response("No chat ID or user ID", { status: 200 });
+      const { isNew } = await initProfile(fromId, username, displayName, lang);
 
-  if (text === "/start") {
-    const subscribed = await isSubscribed(userId);
-    if (subscribed) {
-      user_data[userId] = { api_key: CLIENT_API_KEY, chat_history: [] };
-      const keyboard = {
-        inline_keyboard: [
-          [{ text: "🔑 Set API Key", callback_data: "set_api_key" }, { text: "💬 Start Chat", callback_data: "start_chat" }],
-          [{ text: "🖼️ Generate Image", callback_data: "image_generation" }, { text: "🎬 Generate Video", callback_data: "video_generation" }],
-          [{ text: "💰 Check Balance", callback_data: "check_balance" }]
-        ]
-      };
-      await sendMessage(chatId, 
-        "🤖 <b>Welcome to TM Shop AI Bot!</b>\n\n" +
-        "• 💬 <b>Smart Chat</b> - Talk with AI\n" +
-        "• 🖼️ <b>Image Generation</b> - Create and edit images\n" +
-        "• 🎬 <b>Video Generation</b> - Create videos\n" +
-        "• 💰 <b>Balance System</b> - Monitor expenses\n\n" +
-        "Start by setting your API key or use the default one!",
-        keyboard
-      );
-    } else {
-      const channelButtons = [];
-      for (const channel of CHANNELS) {
-        const title = await getChannelTitle(channel);
-        channelButtons.push([{ text: `${title} 🚀`, url: `https://t.me/${channel}` }]);
-      }
-      await sendMessage(chatId, 
-        "⚠️ Please subscribe to all channels first! Click the button below after subscribing. 📢",
-        { inline_keyboard: [...channelButtons, [{ text: "SUBSCRIBED✅", callback_data: "check_sub" }]] }
-      );
-    }
-  }
-
-  if (data === "check_sub" && messageId) {
-    const subscribed = await isSubscribed(userId);
-    if (subscribed) {
-      user_data[userId] = { api_key: CLIENT_API_KEY, chat_history: [] };
-      const keyboard = {
-        inline_keyboard: [
-          [{ text: "🔑 Set API Key", callback_data: "set_api_key" }, { text: "💬 Start Chat", callback_data: "start_chat" }],
-          [{ text: "🖼️ Generate Image", callback_data: "image_generation" }, { text: "🎬 Generate Video", callback_data: "video_generation" }],
-          [{ text: "💰 Check Balance", callback_data: "check_balance" }]
-        ]
-      };
-      await fetch(`${TELEGRAM_API}/editMessageText`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          message_id: messageId,
-          text: "🎉 You are subscribed to all channels! Enjoy the AI features. 🤖👍",
-          parse_mode: "HTML",
-          reply_markup: keyboard
-        })
-      });
-    } else {
-      const channelButtons = [];
-      for (const channel of CHANNELS) {
-        const title = await getChannelTitle(channel);
-        channelButtons.push([{ text: `${title} 🚀`, url: `https://t.me/${channel}` }]);
-      }
-      await fetch(`${TELEGRAM_API}/editMessageText`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          message_id: messageId,
-          text: "⚠️ You are not subscribed to all channels. Please subscribe! 📢",
-          parse_mode: "HTML",
-          reply_markup: { inline_keyboard: [...channelButtons, [{ text: "SUBSCRIBED✅", callback_data: "check_sub" }]] }
-        })
-      });
-    }
-    await fetch(`${TELEGRAM_API}/answerCallbackQuery`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ callback_query_id: callbackQuery.id })
-    });
-  }
-
-  if (data === "set_api_key") {
-    await fetch(`${TELEGRAM_API}/editMessageText`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        message_id: messageId,
-        text: "🔑 <b>Set API Key</b>\n\n" +
-              "Send your API key in the format:\n" +
-              "<code>/setkey your_api_key</code>\n\n" +
-              "<b>Example:</b>\n" +
-              "<code>/setkey tmshop-aiapi_...</code>",
-        parse_mode: "HTML",
-        reply_markup: { inline_keyboard: [[{ text: "⬅️ Back", callback_data: "back_to_main" }]] }
-      })
-    });
-  }
-
-  if (text?.startsWith("/setkey")) {
-    const apiKey = text.split(" ")[1];
-    if (!apiKey || !apiKey.startsWith("tmshop-")) {
-      await sendMessage(chatId, "❌ <b>Invalid API key format.</b> Key must start with 'tmshop-'.");
-      return new Response("OK", { status: 200 });
-    }
-
-    const verifyResult = await verifyApiKey(apiKey);
-    if (verifyResult.ok) {
-      user_data[userId] = { api_key: apiKey, chat_history: [] };
-      await kv.set(["user_api_key", userId], apiKey);
-      await sendMessage(chatId, 
-        `✅ <b>API key set successfully!</b>\n\n` +
-        `🔑 Key: <code>${apiKey.slice(0, 20)}...</code>\n` +
-        `👤 User ID: ${verifyResult.user_id || 'Unknown'}\n` +
-        `💰 Balance: ${verifyResult.balance?.toFixed(3) || 0} TMT\n` +
-        `📅 Expires: ${verifyResult.expires_at || 'Unknown'}`,
-        {
-          inline_keyboard: [
-            [{ text: "💬 Start Chat", callback_data: "start_chat" }],
-            [{ text: "🖼️ Generate Image", callback_data: "image_generation" }, { text: "🎬 Generate Video", callback_data: "video_generation" }],
-            [{ text: "💰 Check Balance", callback_data: "check_balance" }]
-          ]
-        }
-      );
-    } else {
-      await sendMessage(chatId, `❌ <b>Error:</b> ${verifyResult.error || "Invalid API key"}`);
-    }
-  }
-
-  if (data === "image_generation") {
-    if (!user_data[userId]) {
-      await fetch(`${TELEGRAM_API}/editMessageText`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          message_id: messageId,
-          text: "❌ <b>Please set an API key first!</b>",
-          parse_mode: "HTML",
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "🔑 Set API Key", callback_data: "set_api_key" }, { text: "⬅️ Back", callback_data: "back_to_main" }]
-            ]
-          }
-        })
-      });
-      return new Response("OK", { status: 200 });
-    }
-
-    await fetch(`${TELEGRAM_API}/editMessageText`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        message_id: messageId,
-        text: "🖼️ <b>Image Generation</b>\n\n" +
-              "Select an image generation model:\n\n" +
-              "• <b>🎨 Nano-banana</b> - Edit existing images\n" +
-              "• <b>🖼️ GPT-4o Image</b> - Generate images from scratch\n" +
-              "• <b>✨ Seedream 4.0</b> - Advanced generation with quality options\n\n" +
-              "<i>Select a model, then send the image prompt.</i>",
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🎨 Nano-banana", callback_data: "img_model_nano-banana" },
-             { text: "🖼️ GPT-4o Image", callback_data: "img_model_gpt4o-image" }],
-            [{ text: "✨ Seedream 4.0", callback_data: "img_model_seedream-v4" },
-             { text: "⬅️ Back", callback_data: "back_to_main" }]
-          ]
-        }
-      })
-    });
-  }
-
-  if (data?.startsWith("img_model_")) {
-    const modelId = data.replace("img_model_", "");
-    user_data[userId].image_settings = { model: modelId, awaiting_prompt: true };
-    
-    const modelNames: { [key: string]: string } = {
-      "nano-banana": "Nano-banana",
-      "gpt4o-image": "GPT-4o Image",
-      "seedream-v4": "Seedream 4.0"
-    };
-    
-    const modelInfo: { [key: string]: string } = {
-      "nano-banana": "Great for editing existing images. Send an image and modification prompt.",
-      "gpt4o-image": "Generate images from text descriptions.",
-      "seedream-v4": "Advanced generation with adjustable quality (up to 4K)."
-    };
-
-    await fetch(`${TELEGRAM_API}/editMessageText`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        message_id: messageId,
-        text: `🎨 <b>Selected model: ${modelNames[modelId]}</b>\n\n` +
-              `${modelInfo[modelId]}\n\n` +
-              "<b>Send the image prompt:</b>\n" +
-              "<i>Example: 'A sunset over a desert with a caravan'</i>",
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🔄 Choose another model", callback_data: "image_generation" },
-             { text: "⬅️ Back", callback_data: "back_to_main" }]
-          ]
-        }
-      })
-    });
-  }
-
-  if (data === "video_generation") {
-    if (!user_data[userId]) {
-      await fetch(`${TELEGRAM_API}/editMessageText`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          message_id: messageId,
-          text: "❌ <b>Please set an API key first!</b>",
-          parse_mode: "HTML",
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "🔑 Set API Key", callback_data: "set_api_key" }, { text: "⬅️ Back", callback_data: "back_to_main" }]
-            ]
-          }
-        })
-      });
-      return new Response("OK", { status: 200 });
-    }
-
-    await fetch(`${TELEGRAM_API}/editMessageText`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        message_id: messageId,
-        text: "🎬 <b>Video Generation</b>\n\n" +
-              "Select a video generation model:\n\n" +
-              "• <b>🎬 Veo 3</b> - High-quality video generation\n" +
-              "• <b>⚡ Veo 3 Fast</b> - Quick video generation\n" +
-              "• <b>🔥 Kling 2.5</b> - Next-gen video generator\n" +
-              "• <b>🎥 Wan 2.5</b> - Advanced text-to-video model\n\n" +
-              "<i>Select a model, then send the video prompt.</i>",
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🎬 Veo 3", callback_data: "video_model_veo3" },
-             { text: "⚡ Veo 3 Fast", callback_data: "video_model_veo3-fast" }],
-            [{ text: "🔥 Kling 2.5", callback_data: "video_model_kling2.5-text-to-video" },
-             { text: "🎥 Wan 2.5", callback_data: "video_model_wan2.5-text-to-video" }],
-            [{ text: "⬅️ Back", callback_data: "back_to_main" }]
-          ]
-        }
-      })
-    });
-  }
-
-  if (data?.startsWith("video_model_")) {
-    const modelId = data.replace("video_model_", "");
-    user_data[userId].video_settings = { model: modelId, awaiting_prompt: true };
-    
-    const modelNames: { [key: string]: string } = {
-      "veo3": "Veo 3",
-      "veo3-fast": "Veo 3 Fast",
-      "kling2.5-text-to-video": "Kling 2.5",
-      "wan2.5-text-to-video": "Wan 2.5"
-    };
-    
-    const modelInfo: { [key: string]: string } = {
-      "veo3": "High-quality video generation. May take 5-10 minutes.",
-      "veo3-fast": "Fast video generation. May take 2-5 minutes.",
-      "kling2.5-text-to-video": "Next-gen AI video generator. Realistic videos.",
-      "wan2.5-text-to-video": "Advanced text-to-video model. High resolution."
-    };
-
-    await fetch(`${TELEGRAM_API}/editMessageText`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        message_id: messageId,
-        text: `🎬 <b>Selected model: ${modelNames[modelId]}</b>\n\n` +
-              `${modelInfo[modelId]}\n\n` +
-              "<b>Send the video prompt:</b>\n" +
-              "<i>Example: 'A person walking on the moon, 2D animation'</i>",
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🔄 Choose another model", callback_data: "video_generation" },
-             { text: "⬅️ Back", callback_data: "back_to_main" }]
-          ]
-        }
-      })
-    });
-  }
-
-  if (photo && user_data[userId]?.image_settings?.awaiting_prompt) {
-    user_data[userId].image_settings.has_image = true;
-    user_data[userId].image_settings.file_id = photo[photo.length - 1].file_id;
-    await sendMessage(chatId, 
-      "📸 <b>Image received!</b>\n\n" +
-      "Now send the modification prompt:\n" +
-      "<i>Example: 'Make the image black-and-white with a vintage effect'</i>"
-    );
-  }
-
-  if (text && !text.startsWith("/") && user_data[userId]) {
-    if (user_data[userId].image_settings?.awaiting_prompt) {
-      const prompt = text;
-      const model = user_data[userId].image_settings.model;
-      user_data[userId].image_settings.awaiting_prompt = false;
-
-      let statusMessage = await sendMessage(chatId, IMAGE_STATUSES[Math.floor(Math.random() * IMAGE_STATUSES.length)]);
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      await fetch(`${TELEGRAM_API}/editMessageText`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          message_id: statusMessage.message_id,
-          text: IMAGE_STATUSES[Math.floor(Math.random() * IMAGE_STATUSES.length)].replace("100%", "70%"),
-          parse_mode: "HTML"
-        })
-      });
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      await fetch(`${TELEGRAM_API}/editMessageText`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          message_id: statusMessage.message_id,
-          text: IMAGE_STATUSES.find(s => s.includes("100%")) || "🖼️ Image ready! ✨",
-          parse_mode: "HTML"
-        })
-      });
-
-      let imageUrl: string | undefined;
-      if (user_data[userId].image_settings.has_image) {
-        const file = await fetch(`${TELEGRAM_API}/getFile?file_id=${user_data[userId].image_settings.file_id}`);
-        const fileData = await file.json();
-        imageUrl = `https://api.telegram.org/file/bot${Deno.env.get("BOT_TOKEN")}/${fileData.result.file_path}`;
-      }
-
-      const result = await generateImage(userId, prompt, model, "1:1", imageUrl);
-      await fetch(`${TELEGRAM_API}/deleteMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, message_id: statusMessage.message_id })
-      });
-
-      if (result.success && result.image_url) {
-        await sendPhoto(chatId, result.image_url, 
-          `🎨 <b>Image generated!</b>\n\n` +
-          `<b>Model:</b> ${model}\n` +
-          `<b>Prompt:</b> ${prompt}\n` +
-          `<b>Request ID:</b> <code>${result.request_id}</code>`
-        );
+      if (text.startsWith("/")) {
+        await handleCommand(fromId, username, displayName, text, isNew, lang);
       } else {
-        await sendMessage(chatId, `❌ <b>Image generation error:</b> ${result.error || "Unknown error"}`);
-      }
-    } else if (user_data[userId].video_settings?.awaiting_prompt) {
-      const prompt = text;
-      const model = user_data[userId].video_settings.model;
-      user_data[userId].video_settings.awaiting_prompt = false;
-
-      let statusMessage = await sendMessage(chatId, VIDEO_STATUSES[Math.floor(Math.random() * VIDEO_STATUSES.length)]);
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      await fetch(`${TELEGRAM_API}/editMessageText`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          message_id: statusMessage.message_id,
-          text: VIDEO_STATUSES[Math.floor(Math.random() * VIDEO_STATUSES.length)].replace("100%", "70%"),
-          parse_mode: "HTML"
-        })
-      });
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      await fetch(`${TELEGRAM_API}/editMessageText`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          message_id: statusMessage.message_id,
-          text: VIDEO_STATUSES.find(s => s.includes("100%")) || "🎬 Video ready! ✨",
-          parse_mode: "HTML"
-        })
-      });
-
-      const result = await generateVideo(userId, prompt, model);
-      await fetch(`${TELEGRAM_API}/deleteMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, message_id: statusMessage.message_id })
-      });
-
-      if (result.success && result.video_url) {
-        await sendVideo(chatId, result.video_url,
-          `🎬 <b>Video generated!</b>\n\n` +
-          `<b>Model:</b> ${model}\n` +
-          `<b>Prompt:</b> ${prompt}\n` +
-          `<b>Request ID:</b> <code>${result.request_id}</code>`
-        );
-      } else {
-        await sendMessage(chatId, `❌ <b>Video generation error:</b> ${result.error || "Unknown error"}`);
-      }
-    } else {
-      const statusMessage = await sendMessage(chatId, "🤖 <i>AI is thinking...</i>");
-      const result = await sendChatMessage(userId, text);
-      await fetch(`${TELEGRAM_API}/deleteMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, message_id: statusMessage.message_id })
-      });
-
-      if (result.success) {
-        await sendMessage(chatId, `🤖 ${result.response}`);
-      } else {
-        await sendMessage(chatId, `❌ <b>Error:</b> ${result.error}`);
+        await handleTextInput(fromId, text, username, displayName);
       }
     }
-  }
-
-  if (data === "start_chat") {
-    if (!user_data[userId]) {
-      await fetch(`${TELEGRAM_API}/editMessageText`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          message_id: messageId,
-          text: "❌ <b>Please set an API key first!</b>",
-          parse_mode: "HTML",
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "🔑 Set API Key", callback_data: "set_api_key" }, { text: "⬅️ Back", callback_data: "back_to_main" }]
-            ]
-          }
-        })
-      });
-      return new Response("OK", { status: 200 });
+    // handle callback queries
+    else if (update.callback_query) {
+      await handleCallback(update.callback_query);
     }
 
-    await fetch(`${TELEGRAM_API}/editMessageText`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        message_id: messageId,
-        text: "💬 <b>Chat with AI started!</b>\n\n" +
-              "<b>Current model:</b> <code>anthropic/claude-3-haiku</code>\n\n" +
-              "Send your message to get an AI response.\n\n" +
-              "<b>Chat commands:</b>\n" +
-              "• /clear - Clear chat history\n" +
-              "• /balance - Check balance\n" +
-              "• /back - Return to main menu",
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [[{ text: "⬅️ Back", callback_data: "back_to_main" }]]
-        }
-      })
-    });
+    return new Response("OK");
+  } catch (e) {
+    console.error("server error", e);
+    return new Response("Error", { status: 500 });
   }
-
-  if (text === "/clear") {
-    if (user_data[userId]) {
-      user_data[userId].chat_history = [];
-      await sendMessage(chatId, "✅ <b>Chat history cleared!</b>");
-    }
-  }
-
-  if (text === "/balance") {
-    if (!user_data[userId]) {
-      await sendMessage(chatId, "❌ <b>Please set an API key first!</b>");
-      return new Response("OK", { status: 200 });
-    }
-
-    const result = await verifyApiKey(user_data[userId].api_key);
-    if (result.ok) {
-      await sendMessage(chatId,
-        `💰 <b>Your balance:</b> <code>${result.balance?.toFixed(3)} TMT</code>\n\n` +
-        `<b>Current model:</b> <code>anthropic/claude-3-haiku</code>\n` +
-        `<b>User ID:</b> <code>${result.user_id}</code>\n` +
-        `<b>Expires:</b> ${result.expires_at}`,
-        {
-          inline_keyboard: [
-            [{ text: "💬 Start Chat", callback_data: "start_chat" }],
-            [{ text: "⬅️ Back", callback_data: "back_to_main" }]
-          ]
-        }
-      );
-    } else {
-      await sendMessage(chatId, `❌ <b>Could not check balance:</b> ${result.error}`);
-    }
-  }
-
-  if (data === "check_balance") {
-    if (!user_data[userId]) {
-      await fetch(`${TELEGRAM_API}/editMessageText`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          message_id: messageId,
-          text: "❌ <b>Please set an API key first!</b>",
-          parse_mode: "HTML",
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "🔑 Set API Key", callback_data: "set_api_key" }, { text: "⬅️ Back", callback_data: "back_to_main" }]
-            ]
-          }
-        })
-      });
-      return new Response("OK", { status: 200 });
-    }
-
-    const result = await verifyApiKey(user_data[userId].api_key);
-    if (result.ok) {
-      await fetch(`${TELEGRAM_API}/editMessageText`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          message_id: messageId,
-          text: `💰 <b>Your balance:</b> <code>${result.balance?.toFixed(3)} TMT</code>\n\n` +
-                `<b>Current model:</b> <code>anthropic/claude-3-haiku</code>\n` +
-                `<b>User ID:</b> <code>${result.user_id}</code>\n` +
-                `<b>Expires:</b> ${result.expires_at}`,
-          parse_mode: "HTML",
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "💬 Start Chat", callback_data: "start_chat" }],
-              [{ text: "⬅️ Back", callback_data: "back_to_main" }]
-            ]
-          }
-        })
-      });
-    } else {
-      await fetch(`${TELEGRAM_API}/editMessageText`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          message_id: messageId,
-          text: `❌ <b>Could not check balance:</b> ${result.error}`,
-          parse_mode: "HTML",
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "🔄 Try Again", callback_data: "check_balance" }, { text: "⬅️ Back", callback_data: "back_to_main" }]
-            ]
-          }
-        })
-      });
-    }
-  }
-
-  if (data === "back_to_main") {
-    await fetch(`${TELEGRAM_API}/editMessageText`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        message_id: messageId,
-        text: "🤖 <b>TM Shop AI Bot - Main Menu</b>\n\n" +
-              "• 💬 <b>Smart Chat</b> - Talk with AI\n" +
-              "• 🖼️ <b>Image Generation</b> - Create and edit images\n" +
-              "• 🎬 <b>Video Generation</b> - Create videos\n" +
-              "• 💰 <b>Balance System</b> - Monitor expenses\n\n" +
-              "Choose an action:",
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🔑 Set API Key", callback_data: "set_api_key" }, { text: "💬 Start Chat", callback_data: "start_chat" }],
-            [{ text: "🖼️ Generate Image", callback_data: "image_generation" }, { text: "🎬 Generate Video", callback_data: "video_generation" }],
-            [{ text: "💰 Check Balance", callback_data: "check_balance" }]
-          ]
-        }
-      })
-    });
-  }
-
-  return new Response("OK", { status: 200 });
 });
