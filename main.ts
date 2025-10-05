@@ -5,7 +5,7 @@ const TELEGRAM_API = `https://api.telegram.org/bot${Deno.env.get("BOT_TOKEN")}`;
 const API_SERVER_URL = "http://213.176.72.67:6000";
 const CLIENT_API_KEY = "tmshop-aiapi_250f0b6b206ea27203a6c00ba61039cf60f0a5a788fbf02f700bf80e8c704b78";
 const SECRET_PATH = "/masakoffvpnhelper";
-const CHANNELS = ["MasakoffVpns", "AMERICAN_VPN", "POLO_SHXP"];
+const CHANNELS = ["MasakoffVpns"];
 const ADMIN_USERNAME = "Masakoff";
 
 interface UserData {
