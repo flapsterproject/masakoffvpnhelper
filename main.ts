@@ -1,51 +1,84 @@
 // main.ts
 // Convix Ads Bot (Deno) - Smart Growth & Monetization for Telegram Channels
-// Features: Main menu with inline buttons, grow channel, earn from channel, AI ad generator,
-// my account, support, admin panel (hidden), referral system, currency (Convix Credits - CX)
-// Multi-language support (English, Russian, Turkmen) - defaults to English
-// Anti-fake detection (simulated), auto-notifications (simulated)
-// Uses Deno KV for storage, webhook setup
-//
-// Notes: Requires BOT_TOKEN env var and Deno KV. Deploy as webhook at SECRET_PATH.
+// Implements core flows based on detailed specification
+// Uses Deno KV for storage (simulating DB schema with prefixes)
+// Webhook setup, multi-language support, states for multi-step flows
+// Simulated AI ad generation (fixed templates)
+// Basic admin panel, referral system, anti-fraud placeholders
+// Note: For full production, integrate payments, real AI (e.g., OpenAI), and expand verification
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { v4 as uuid } from "https://deno.land/std@0.224.0/uuid/mod.ts";
 
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
-const SECRET_PATH = "/masakoffvpnhelper"; // make sure webhook path matches
-const BOT_USERNAME = "MasakoffVpnHelperBot"; // Adjust to your bot's username
+const SECRET_PATH = "/masakoffvpnhelper"; // webhook path
+const BOT_USERNAME = "MasakoffVpnsHelperBot";
 
-// Deno KV
 const kv = await Deno.openKv();
 
-const ADMIN_USERNAME = "Masakoff"; // without @, replace with actual
+const ADMIN_USERNAME = "Masakoff"; // replace with actual
 
-// Languages
 const LANGUAGES = ["en", "ru", "tk"] as const;
 type Language = typeof LANGUAGES[number];
 
-// runtime storages (temporary, for quick access)
-const searchTimeouts: Record<string, number> = {};
+// Types based on schema
+type User = {
+  id: string; // UUID
+  tg_id: string;
+  username?: string;
+  full_name: string;
+  language: Language;
+  balance: number;
+  role: "user" | "admin";
+  created_at: number;
+};
 
-// State helpers using KV
-async function getUserState(userId: string): Promise<{ step: string; data?: any } | null> {
-  const res = await kv.get<{ step: string; data?: any }>(["states", "user", userId]);
-  return res.value;
-}
+type Channel = {
+  id: string; // UUID
+  owner_id: string;
+  tg_channel_id: string;
+  username?: string;
+  title: string;
+  is_verified: boolean;
+  connected_at?: number;
+  status: "pending" | "active" | "banned";
+  daily_ad_limit: number;
+  categories: string[];
+  region: string;
+  created_at: number;
+};
 
-async function setUserState(userId: string, state: { step: string; data?: any } | null) {
-  if (state) {
-    await kv.set(["states", "user", userId], state);
-  } else {
-    await kv.delete(["states", "user", userId]);
-  }
-}
+type Campaign = {
+  id: string; // UUID
+  advertiser_id: string;
+  channel_id: string;
+  title: string;
+  description: string;
+  creative: any; // JSON
+  target: any; // JSON
+  budget: number;
+  price_per_join: number;
+  status: "active" | "paused" | "finished" | "cancelled";
+  start_at?: number;
+  end_at?: number;
+  daily_limit?: number;
+  created_at: number;
+};
 
-// -------------------- Telegram helpers --------------------
-async function sendMessage(chatId: string | number, text: string, options: any = {}): Promise<number | null> {
+// ... other types as needed (joins, transactions, etc.)
+
+// State type
+type UserState = {
+  step: string;
+  data: any;
+} | null;
+
+// Telegram helpers
+async function sendMessage(chatId: string, text: string, options: any = {}): Promise<number | null> {
   try {
-    const body: any = { chat_id: chatId, text, ...options };
+    const body = { chat_id: chatId, text, ...options };
     const res = await fetch(`${API}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -59,7 +92,7 @@ async function sendMessage(chatId: string | number, text: string, options: any =
   }
 }
 
-async function editMessageText(chatId: string | number, messageId: number, text: string, options: any = {}) {
+async function editMessageText(chatId: string, messageId: number, text: string, options: any = {}) {
   try {
     const body = { chat_id: chatId, message_id: messageId, text, ...options };
     await fetch(`${API}/editMessageText`, {
@@ -68,7 +101,7 @@ async function editMessageText(chatId: string | number, messageId: number, text:
       body: JSON.stringify(body),
     });
   } catch (e) {
-    console.warn("editMessageText failed", e?.message ?? e);
+    console.warn("editMessageText failed", e);
   }
 }
 
@@ -80,476 +113,451 @@ async function answerCallbackQuery(id: string, text = "", showAlert = false) {
       body: JSON.stringify({ callback_query_id: id, text, show_alert: showAlert }),
     });
   } catch (e) {
-    console.warn("answerCallbackQuery failed", e?.message ?? e);
+    console.warn("answerCallbackQuery failed", e);
   }
 }
 
-// -------------------- Profile helpers --------------------
-type Profile = {
-  id: string;
-  username?: string;
-  displayName: string;
-  language: Language;
-  balance: number; // CX credits
-  earnings: number;
-  channels: string[]; // connected channels
-  campaigns: any[]; // active campaigns
-  referrals: number;
-  referralLink: string;
-  lastActive: number;
-};
-
-function getDisplayName(p: Profile) {
-  if (p.username) return `@${p.username}`;
-  return p.displayName && p.displayName !== "" ? p.displayName : `ID:${p.id}`;
+async function getChatMember(chatId: string, userId: string) {
+  try {
+    const res = await fetch(`${API}/getChatMember?chat_id=${chatId}&user_id=${userId}`);
+    const data = await res.json();
+    if (data.ok) return data.result;
+    return null;
+  } catch (e) {
+    console.error("getChatMember error", e);
+    return null;
+  }
 }
 
-async function initProfile(userId: string, username?: string, displayName?: string, language: Language = "en"): Promise<{ profile: Profile; isNew: boolean }> {
-  const key = ["profiles", userId];
-  const res = await kv.get(key);
-  if (!res.value) {
-    const referralLink = `https://t.me/${BOT_USERNAME}?start=ref_${userId}`;
-    const profile: Profile = {
-      id: userId,
+// KV helpers for states
+async function getUserState(userId: string): Promise<UserState> {
+  const res = await kv.get<UserState>(["states", userId]);
+  return res.value;
+}
+
+async function setUserState(userId: string, state: UserState) {
+  if (state) {
+    await kv.set(["states", userId], state);
+  } else {
+    await kv.delete(["states", userId]);
+  }
+}
+
+// Profile/User helpers
+async function getUser(tgId: string): Promise<User | null> {
+  const res = await kv.get<User>(["users", tgId]);
+  return res.value;
+}
+
+async function createOrUpdateUser(tgId: string, username: string | undefined, fullName: string, language: Language): Promise<User> {
+  let user = await getUser(tgId);
+  if (!user) {
+    user = {
+      id: uuid.generate(),
+      tg_id: tgId,
       username,
-      displayName: displayName || `ID:${userId}`,
+      full_name: fullName,
       language,
       balance: 0,
-      earnings: 0,
-      channels: [],
-      campaigns: [],
-      referrals: 0,
-      referralLink,
-      lastActive: Date.now(),
+      role: username === ADMIN_USERNAME ? "admin" : "user",
+      created_at: Date.now(),
     };
-    await kv.set(key, profile);
-    return { profile, isNew: true };
+    await kv.set(["users", tgId], user);
   } else {
-    const existing = res.value as Profile;
-    let changed = false;
-    if (username && username !== existing.username) {
-      existing.username = username;
-      changed = true;
-    }
-    if (displayName && displayName !== existing.displayName) {
-      existing.displayName = displayName;
-      changed = true;
-    }
-    existing.lastActive = Date.now();
-    await kv.set(key, existing);
-    return { profile: existing, isNew: false };
+    user.username = username ?? user.username;
+    user.full_name = fullName;
+    user.language = language;
+    await kv.set(["users", tgId], user);
   }
+  return user;
 }
 
-async function getProfile(userId: string): Promise<Profile | null> {
-  const res = await kv.get(["profiles", userId]);
-  return (res.value as Profile) ?? null;
+// Channel helpers
+async function getChannel(id: string): Promise<Channel | null> {
+  const res = await kv.get<Channel>(["channels", id]);
+  return res.value;
 }
 
-async function updateProfile(userId: string, delta: Partial<Profile>) {
-  const existing = (await getProfile(userId)) || (await initProfile(userId)).profile;
-  const newProfile: Profile = {
-    ...existing,
-    ...delta,
-    balance: Math.max(0, (existing.balance || 0) + (delta.balance ?? 0)),
-    earnings: Math.max(0, (existing.earnings || 0) + (delta.earnings ?? 0)),
-    referrals: (existing.referrals || 0) + (delta.referrals ?? 0),
-    lastActive: Date.now(),
+async function createChannel(ownerId: string, tgChannelId: string, username: string | undefined, title: string): Promise<Channel> {
+  const id = uuid.generate();
+  const channel: Channel = {
+    id,
+    owner_id: ownerId,
+    tg_channel_id: tgChannelId,
+    username,
+    title,
+    is_verified: false,
+    status: "pending",
+    daily_ad_limit: 10,
+    categories: [],
+    region: "",
+    created_at: Date.now(),
   };
-  await kv.set(["profiles", userId], newProfile);
-  return newProfile;
+  await kv.set(["channels", id], channel);
+  // Add to user's channels list if needed (optional, can query by owner_id)
+  return channel;
 }
 
-// -------------------- Translation helper --------------------
-function t(lang: Language, key: string): string {
+async function updateChannel(id: string, updates: Partial<Channel>) {
+  const channel = await getChannel(id);
+  if (channel) {
+    const updated = { ...channel, ...updates };
+    await kv.set(["channels", id], updated);
+    return updated;
+  }
+  return null;
+}
+
+// Campaign helpers
+async function getCampaign(id: string): Promise<Campaign | null> {
+  const res = await kv.get<Campaign>(["campaigns", id]);
+  return res.value;
+}
+
+async function createCampaign(advertiserId: string, channelId: string, data: Partial<Campaign>): Promise<Campaign> {
+  const id = uuid.generate();
+  const campaign: Campaign = {
+    id,
+    advertiser_id: advertiserId,
+    channel_id: channelId,
+    title: data.title ?? "",
+    description: data.description ?? "",
+    creative: data.creative ?? {},
+    target: data.target ?? {},
+    budget: data.budget ?? 0,
+    price_per_join: data.price_per_join ?? 0.2,
+    status: "active",
+    created_at: Date.now(),
+  };
+  await kv.set(["campaigns", id], campaign);
+  return campaign;
+}
+
+// Translation function (add more as needed)
+function t(lang: Language, key: string, params: Record<string, any> = {}): string {
   const translations: Record<string, Record<Language, string>> = {
-    welcome: { en: "Welcome to Convix Ads! 🚀\nYour intelligent tool for growing and monetizing Telegram channels.\nSelect an option below 👇", ru: "Добро пожаловать в Convix Ads! 🚀\nВаш умный инструмент для роста и монетизации Telegram-каналов.\nВыберите опцию ниже 👇", tk: "Convix Ads-a hoş geldiňiz! 🚀\nTelegram kanallaryny ösdürmek we pul gazanmak üçin akylly guram.\nAşakdaky saýlawyň birini saýlaň 👇" },
-    // Add more translations as needed
-    back: { en: "🔙 Back to Main", ru: "🔙 Назад в главное", tk: "🔙 Esasy menýu" },
-    // ... etc for all texts
+    welcome: { en: "Welcome to Convix Ads! 🚀\nGrow faster. Earn smarter.\n\nChoose an option below 👇", ru: "Добро пожаловать в Convix Ads! 🚀\nРастите быстрее. Зарабатывайте умнее.\n\nВыберите опцию ниже 👇", tk: "Convix Ads-a hoş geldiňiz! 🚀\nHas çalt ösüň. Akylly gazanyň.\n\nAşakdaky saýlawy saýlaň 👇" },
+    grow_desc: { en: "Create a promotion to get real subscribers. Select:", ru: "Создайте продвижение для реальных подписчиков. Выберите:", tk: "Hakykat abunaçylar almak üçin reklama dörediň. Saýlaň:" },
+    earn_desc: { en: "Monetize your channel by allowing Convix to post promos automatically.", ru: "Монетизируйте канал, разрешив Convix автоматически публиковать промо.", tk: "Convix-e awtomatik reklama ýerleşdirmäge rugsat berip, kanalyňyzy monetizasiýa ediň." },
+    ai_desc: { en: "Generate catchy ad posts in one tap. Choose style:", ru: "Генерируйте привлекательные рекламные посты в один клик. Выберите стиль:", tk: "Bir dokunmak bilen gyzykly reklama ýazgylaryny dörediň. Stil saýlaň:" },
+    account_desc: { en: "Account Summary", ru: "Сводка аккаунта", tk: "Hasap jemi" },
+    support_desc: { en: "Support Menu", ru: "Меню поддержки", tk: "Goldaw menýu" },
+    // Add more keys for all texts in spec
   };
-  return translations[key]?.[lang] || key;
+  let text = translations[key]?.[lang] || key;
+  for (const [k, v] of Object.entries(params)) {
+    text = text.replace(`{${k}}`, v);
+  }
+  return text;
 }
 
-// -------------------- Menu helpers --------------------
+// Menu keyboards
 function getMainMenu(lang: Language): any {
   return {
     inline_keyboard: [
-      [{ text: "📈 Grow My Channel", callback_data: "menu:grow" }],
-      [{ text: "💰 Earn From My Channel", callback_data: "menu:earn" }],
-      [{ text: "👤 My Account", callback_data: "menu:account" }],
-      [{ text: "🧠 AI Ad Generator", callback_data: "menu:ai" }],
-      [{ text: "💬 Support", callback_data: "menu:support" }],
-    ]
+      [{ text: "📈 Grow My Channel", callback_data: "grow_menu" }],
+      [{ text: "💰 Earn From My Channel", callback_data: "earn_menu" }],
+      [{ text: "🧠 AI Ad Generator", callback_data: "ai_generator" }],
+      [{ text: "👤 My Account", callback_data: "account_menu" }],
+      [{ text: "💬 Support", callback_data: "support_menu" }],
+    ],
   };
 }
 
 function getGrowMenu(lang: Language): any {
   return {
     inline_keyboard: [
-      [{ text: "➕ Add Channel", callback_data: "grow:add_channel" }],
-      [{ text: "💵 Deposit Balance", callback_data: "grow:deposit" }],
-      [{ text: "🎯 Create Promotion", callback_data: "grow:create_promo" }],
-      [{ text: "📊 My Campaigns", callback_data: "grow:campaigns" }],
-      [{ text: "🧮 Pricing Info", callback_data: "grow:pricing" }],
-      [{ text: t(lang, "back"), callback_data: "menu:main" }],
-    ]
+      [{ text: "➕ Add Channel", callback_data: "add_channel" }],
+      [{ text: "🎯 Create Promotion", callback_data: "create_campaign" }],
+      [{ text: "📊 My Campaigns", callback_data: "my_campaigns" }],
+      [{ text: "💵 Deposit Balance", callback_data: "deposit" }],
+      [{ text: "🔙 Back", callback_data: "main_menu" }],
+    ],
   };
 }
 
 function getEarnMenu(lang: Language): any {
   return {
     inline_keyboard: [
-      [{ text: "➕ Connect My Channel", callback_data: "earn:connect" }],
-      [{ text: "💸 Withdraw Earnings", callback_data: "earn:withdraw" }],
-      [{ text: "📅 Earnings History", callback_data: "earn:history" }],
-      [{ text: "⚙️ Ad Settings", callback_data: "earn:settings" }],
-      [{ text: t(lang, "back"), callback_data: "menu:main" }],
-    ]
-  };
-}
-
-function getAccountMenu(lang: Language): any {
-  return {
-    inline_keyboard: [
-      [{ text: "💰 My Balance", callback_data: "account:balance" }],
-      [{ text: "🎯 Active Campaigns", callback_data: "account:campaigns" }],
-      [{ text: "📊 Channel Stats", callback_data: "account:stats" }],
-      [{ text: "👥 Referrals", callback_data: "account:referrals" }],
-      [{ text: "⚙️ Settings", callback_data: "account:settings" }],
-      [{ text: t(lang, "back"), callback_data: "menu:main" }],
-    ]
+      [{ text: "➕ Connect My Channel", callback_data: "connect_channel" }],
+      [{ text: "⚙️ Ad Settings", callback_data: "publisher_settings" }],
+      [{ text: "💸 Withdraw Earnings", callback_data: "withdraw" }],
+      [{ text: "📅 Earnings History", callback_data: "earnings_history" }],
+      [{ text: "🔙 Back", callback_data: "main_menu" }],
+    ],
   };
 }
 
 function getAIMenu(lang: Language): any {
   return {
     inline_keyboard: [
-      [{ text: "📝 Generate Ad Post", callback_data: "ai:generate" }],
-      [{ text: "✏️ Rewrite Existing Post", callback_data: "ai:rewrite" }],
-      [{ text: "🧩 Add Hashtags", callback_data: "ai:hashtags" }],
-      [{ text: "💾 Save Template", callback_data: "ai:save" }],
-      [{ text: t(lang, "back"), callback_data: "menu:main" }],
-    ]
+      [{ text: "📝 Short Promo (1-2 lines)", callback_data: "ai_short" }],
+      [{ text: "🧾 Detailed Post (with CTA)", callback_data: "ai_long" }],
+      [{ text: "✏️ Rewrite Existing", callback_data: "ai_rewrite" }],
+      [{ text: "💾 Save Template", callback_data: "ai_save_template" }],
+      [{ text: "🔙 Back", callback_data: "main_menu" }],
+    ],
+  };
+}
+
+function getAccountMenu(lang: Language): any {
+  return {
+    inline_keyboard: [
+      [{ text: "💰 My Balance", callback_data: "balance" }],
+      [{ text: "📊 Channel Stats", callback_data: "channel_stats" }],
+      [{ text: "👥 Referrals", callback_data: "referrals" }],
+      [{ text: "⚙️ Settings", callback_data: "user_settings" }],
+      [{ text: "🔙 Back", callback_data: "main_menu" }],
+    ],
   };
 }
 
 function getSupportMenu(lang: Language): any {
   return {
     inline_keyboard: [
-      [{ text: "📚 FAQ", callback_data: "support:faq" }],
-      [{ text: "🧑‍💻 Contact Admin", callback_data: "support:contact" }],
-      [{ text: "🏦 Payment & Payout Rules", callback_data: "support:rules" }],
-      [{ text: "🔒 Privacy Policy", callback_data: "support:privacy" }],
-      [{ text: t(lang, "back"), callback_data: "menu:main" }],
-    ]
+      [{ text: "📚 FAQ", callback_data: "faq" }],
+      [{ text: "🧑‍💻 Contact Admin", callback_data: "contact_admin" }],
+      [{ text: "📝 Report a Problem", callback_data: "report_problem" }],
+      [{ text: "🔙 Back", callback_data: "main_menu" }],
+    ],
   };
 }
 
 function getAdminMenu(lang: Language): any {
   return {
     inline_keyboard: [
-      [{ text: "🧾 Manage Channels", callback_data: "admin:channels" }],
-      [{ text: "💰 Manage Balances", callback_data: "admin:balances" }],
-      [{ text: "📤 Approve Payouts", callback_data: "admin:payouts" }],
-      [{ text: "📢 Broadcast Message", callback_data: "admin:broadcast" }],
-      [{ text: "🎁 Create Promo Code", callback_data: "admin:promo" }],
-      [{ text: "🪙 Manage Coin Prices", callback_data: "admin:prices" }],
-      [{ text: "📊 System Stats", callback_data: "admin:stats" }],
-    ]
+      [{ text: "🧾 Manage Channels", callback_data: "admin_channels" }],
+      [{ text: "💸 Manage Balances", callback_data: "admin_balances" }],
+      [{ text: "📤 Approve Payouts", callback_data: "admin_payouts" }],
+      [{ text: "📢 Broadcast", callback_data: "admin_broadcast" }],
+      [{ text: "🎁 Create Promo Code", callback_data: "admin_promo" }],
+      [{ text: "📊 System Stats", callback_data: "admin_stats" }],
+    ],
   };
 }
 
-// -------------------- Callback handler --------------------
+// Callback handler
 async function handleCallback(cb: any) {
-  const fromId = String(cb.from.id);
-  const data = cb.data ?? null;
+  const fromId = cb.from.id.toString();
+  const data = cb.data;
   const callbackId = cb.id;
   const username = cb.from.username;
-  const lang = (await getProfile(fromId))?.language || "en";
+  const user = await getUser(fromId);
+  const lang = user?.language || "en";
+  const msgId = cb.message.message_id;
 
   if (!data) {
     await answerCallbackQuery(callbackId);
     return;
   }
 
-  if (data.startsWith("menu:")) {
-    const menu = data.split(":")[1];
-    let text: string;
-    let keyboard: any;
-    if (menu === "main") {
-      text = t(lang, "welcome");
-      keyboard = getMainMenu(lang);
-    } else if (menu === "grow") {
-      text = "Promote your channel to real users who are interested in your content.";
-      keyboard = getGrowMenu(lang);
-    } else if (menu === "earn") {
-      text = "Monetize your channel by allowing Convix Ads to promote other channels automatically.";
-      keyboard = getEarnMenu(lang);
-    } else if (menu === "account") {
-      text = "View your profile, balance, stats, and referral bonuses.";
-      keyboard = getAccountMenu(lang);
-    } else if (menu === "ai") {
-      text = "Create professional, catchy ad posts in one click using AI.";
-      keyboard = getAIMenu(lang);
-    } else if (menu === "support") {
-      text = "Support & Info";
-      keyboard = getSupportMenu(lang);
-    } else {
-      await answerCallbackQuery(callbackId, "Unknown menu.");
-      return;
-    }
-    const msgId = cb.message.message_id;
-    await editMessageText(fromId, msgId, text, { reply_markup: keyboard });
-    await answerCallbackQuery(callbackId);
-    return;
-  }
-
-  // Handle sub-actions
-  if (data.startsWith("grow:")) {
-    const action = data.split(":")[1];
-    // Implement actions like add_channel, deposit, etc.
-    // For example, set state and prompt user
-    if (action === "add_channel") {
-      await setUserState(fromId, { step: "add_channel" });
-      await sendMessage(fromId, "Please enter your channel username or ID to add.");
-    } else if (action === "deposit") {
-      await setUserState(fromId, { step: "deposit" });
-      await sendMessage(fromId, "Enter amount to deposit (in CX).");
-    } // ... add more
-    await answerCallbackQuery(callbackId);
-    return;
-  }
-
-  if (data.startsWith("earn:")) {
-    const action = data.split(":")[1];
-    if (action === "connect") {
-      await setUserState(fromId, { step: "connect_channel" });
-      await sendMessage(fromId, "Enter your channel to connect for earning.");
-    } else if (action === "withdraw") {
-      const profile = await getProfile(fromId);
-      if (profile && profile.earnings >= 1) { // min withdrawal example
-        await setUserState(fromId, { step: "withdraw" });
-        await sendMessage(fromId, "Enter withdrawal amount.");
-      } else {
-        await answerCallbackQuery(callbackId, "Insufficient earnings.", true);
+  switch (data) {
+    case "main_menu":
+      await editMessageText(fromId, msgId, t(lang, "welcome"), { reply_markup: getMainMenu(lang) });
+      break;
+    case "grow_menu":
+      await editMessageText(fromId, msgId, t(lang, "grow_desc"), { reply_markup: getGrowMenu(lang) });
+      break;
+    case "earn_menu":
+      await editMessageText(fromId, msgId, t(lang, "earn_desc"), { reply_markup: getEarnMenu(lang) });
+      break;
+    case "ai_generator":
+      await editMessageText(fromId, msgId, t(lang, "ai_desc"), { reply_markup: getAIMenu(lang) });
+      break;
+    case "account_menu":
+      await editMessageText(fromId, msgId, t(lang, "account_desc"), { reply_markup: getAccountMenu(lang) });
+      break;
+    case "support_menu":
+      await editMessageText(fromId, msgId, t(lang, "support_desc"), { reply_markup: getSupportMenu(lang) });
+      break;
+    case "add_channel":
+      await setUserState(fromId, { step: "add_channel", data: {} });
+      await sendMessage(fromId, "Enter your channel username (e.g., @mychannel) or ID.");
+      break;
+    case "create_campaign":
+      await setUserState(fromId, { step: "create_campaign_title", data: {} });
+      await sendMessage(fromId, "Enter campaign title.");
+      break;
+    case "my_campaigns":
+      // List campaigns (simulate)
+      await sendMessage(fromId, "Your campaigns: (list here)");
+      break;
+    case "deposit":
+      await setUserState(fromId, { step: "deposit", data: {} });
+      await sendMessage(fromId, "Enter deposit amount.");
+      break;
+    case "connect_channel":
+      await setUserState(fromId, { step: "connect_channel", data: {} });
+      await sendMessage(fromId, "Enter your channel to connect.");
+      break;
+    case "withdraw":
+      await setUserState(fromId, { step: "withdraw", data: {} });
+      await sendMessage(fromId, "Enter withdrawal amount.");
+      break;
+    case "ai_short":
+      await setUserState(fromId, { step: "ai_short", data: {} });
+      await sendMessage(fromId, "Enter topic for short promo.");
+      break;
+    // Add cases for other callbacks
+    case "verify_channel":
+      const state = await getUserState(fromId);
+      if (state && state.step === "verify_channel") {
+        const channelUsername = state.data.channel;
+        const member = await getChatMember(`@${channelUsername}`, fromId);
+        if (member && ['creator', 'administrator'].includes(member.status)) {
+          const channel = await getChannel(state.data.channelId); // assume stored
+          if (channel) {
+            await updateChannel(channel.id, { is_verified: true, status: "active" });
+            await sendMessage(fromId, "Channel verified!");
+          }
+        } else {
+          await sendMessage(fromId, "Verification failed. Make sure bot is admin and try again.");
+        }
+        await setUserState(fromId, null);
       }
-    } // ... add more
-    await answerCallbackQuery(callbackId);
-    return;
+      break;
+    default:
+      if (data.startsWith("admin_") && user?.role === "admin") {
+        // Handle admin actions
+        await answerCallbackQuery(callbackId, "Admin action: " + data);
+      } else {
+        await answerCallbackQuery(callbackId, "Unknown action.");
+      }
   }
-
-  if (data.startsWith("account:")) {
-    const action = data.split(":")[1];
-    const profile = await getProfile(fromId);
-    if (!profile) {
-      await answerCallbackQuery(callbackId, "Profile not found.", true);
-      return;
-    }
-    if (action === "balance") {
-      await sendMessage(fromId, `Your balance: ${profile.balance} CX`);
-    } else if (action === "referrals") {
-      await sendMessage(fromId, `Referrals: ${profile.referrals}\nLink: ${profile.referralLink}`);
-    } // ... add more
-    await answerCallbackQuery(callbackId);
-    return;
-  }
-
-  if (data.startsWith("ai:")) {
-    const action = data.split(":")[1];
-    if (action === "generate") {
-      await setUserState(fromId, { step: "ai_generate" });
-      await sendMessage(fromId, "Describe the ad you want to generate.");
-    } // ... add more (simulate AI with fixed output)
-    await answerCallbackQuery(callbackId);
-    return;
-  }
-
-  if (data.startsWith("support:")) {
-    const action = data.split(":")[1];
-    if (action === "faq") {
-      await sendMessage(fromId, "FAQ: ..."); // Add content
-    } // ... add more
-    await answerCallbackQuery(callbackId);
-    return;
-  }
-
-  if (data.startsWith("admin:")) {
-    if (username !== ADMIN_USERNAME) {
-      await answerCallbackQuery(callbackId, "Access denied.", true);
-      return;
-    }
-    const action = data.split(":")[1];
-    if (action === "stats") {
-      // Implement stats
-      let userCount = 0;
-      for await (const _ of kv.list({ prefix: ["profiles"] })) userCount++;
-      await sendMessage(fromId, `Users: ${userCount}`);
-    } // ... add more admin actions
-    await answerCallbackQuery(callbackId);
-    return;
-  }
-
   await answerCallbackQuery(callbackId);
 }
 
-// -------------------- Command handler --------------------
-async function handleCommand(fromId: string, username: string | undefined, displayName: string, text: string, isNew: boolean, lang: Language) {
-  if (text.startsWith("/start")) {
-    let referrerId: string | undefined;
-    const parts = text.split(" ");
-    if (parts.length > 1 && parts[1].startsWith("ref_")) {
-      referrerId = parts[1].slice(4);
-    }
-    if (referrerId && isNew && referrerId !== fromId) {
-      const refProfile = await getProfile(referrerId);
-      if (refProfile) {
-        await updateProfile(referrerId, { balance: refProfile.balance + 0.1, referrals: 1 }); // 10% bonus example
-        await sendMessage(referrerId, "New referral! +10% bonus.");
-        await sendMessage(fromId, `Referred by ID:${referrerId}.`);
-      }
-    }
-    const welcome = t(lang, "welcome");
-    await sendMessage(fromId, welcome, { reply_markup: getMainMenu(lang) });
-    return;
-  }
-
-  if (text.startsWith("/grow")) {
-    await sendMessage(fromId, "Grow My Channel", { reply_markup: getGrowMenu(lang) });
-    return;
-  }
-
-  if (text.startsWith("/earn")) {
-    await sendMessage(fromId, "Earn From My Channel", { reply_markup: getEarnMenu(lang) });
-    return;
-  }
-
-  if (text.startsWith("/balance")) {
-    const profile = await getProfile(fromId);
-    await sendMessage(fromId, `Balance: ${profile?.balance ?? 0} CX`);
-    return;
-  }
-
-  if (text.startsWith("/withdraw")) {
-    // Similar to earn:withdraw
-    await sendMessage(fromId, "Enter withdrawal amount.");
-    await setUserState(fromId, { step: "withdraw" });
-    return;
-  }
-
-  if (text.startsWith("/help")) {
-    await sendMessage(fromId, "Help: Use menus or commands like /grow, /earn.");
-    return;
-  }
-
-  if (text.startsWith("/admin")) {
-    if (username !== ADMIN_USERNAME) {
-      await sendMessage(fromId, "Access denied.");
-      return;
-    }
-    await sendMessage(fromId, "Admin Panel", { reply_markup: getAdminMenu(lang) });
-    return;
-  }
-
-  await sendMessage(fromId, "Unknown command. Use /help.");
-}
-
-// -------------------- Text input handler --------------------
-async function handleTextInput(fromId: string, text: string, username: string | undefined, displayName: string) {
+// Text input handler
+async function handleText(fromId: string, text: string, user: User) {
   const state = await getUserState(fromId);
+  const lang = user.language;
+
   if (!state) return;
 
-  // Handle states
-  if (state.step === "add_channel") {
-    // Simulate adding channel
-    const profile = await getProfile(fromId);
-    if (profile) {
-      profile.channels.push(text);
-      await updateProfile(fromId, { channels: profile.channels });
-      await sendMessage(fromId, `Channel ${text} added.`);
-    }
-    await setUserState(fromId, null);
-  } else if (state.step === "deposit") {
-    // Simulate deposit
-    const amount = parseFloat(text);
-    if (!isNaN(amount) && amount > 0) {
-      await updateProfile(fromId, { balance: amount });
-      await sendMessage(fromId, `${amount} CX deposited.`);
-    } else {
-      await sendMessage(fromId, "Invalid amount.");
-    }
-    await setUserState(fromId, null);
-  } else if (state.step === "withdraw") {
-    // Simulate withdrawal
-    const amount = parseFloat(text);
-    const profile = await getProfile(fromId);
-    if (profile && amount > 0 && amount <= profile.earnings) {
-      await updateProfile(fromId, { earnings: -amount });
-      await sendMessage(fromId, `${amount} withdrawn.`);
-      // Notify admin
-      const adminProfile = await getProfileByUsername(ADMIN_USERNAME);
-      if (adminProfile) await sendMessage(adminProfile.id, `Withdrawal request: ${amount} from ${fromId}`);
-    } else {
-      await sendMessage(fromId, "Invalid or insufficient amount.");
-    }
-    await setUserState(fromId, null);
-  } else if (state.step === "ai_generate") {
-    // Simulate AI
-    const example = "🚀 Join TechNow — the #1 place for daily AI news!\n🎯 Learn faster, stay ahead, and connect with innovators.\n🔗 [Join Now]";
-    await sendMessage(fromId, `Generated ad:\n${example}`);
-    await setUserState(fromId, null);
-  } // ... add more states
-
-}
-
-async function getProfileByUsername(username: string): Promise<Profile | null> {
-  try {
-    for await (const entry of kv.list({ prefix: ["profiles"] })) {
-      const profile = entry.value as Profile;
-      if (profile?.username === username) return profile;
-    }
-  } catch (e) {
-    console.error("getProfileByUsername error", e);
+  switch (state.step) {
+    case "add_channel":
+    case "connect_channel":
+      const channelUsername = text.startsWith("@") ? text.slice(1) : text;
+      const channel = await createChannel(user.id, channelUsername, channelUsername, "Title"); // title to fetch later
+      await sendMessage(fromId, `Add the bot as admin to @${channelUsername}, then press Verify.`, {
+        reply_markup: { inline_keyboard: [[{ text: "Verify", callback_data: "verify_channel" }]] },
+      });
+      await setUserState(fromId, { step: "verify_channel", data: { channel: channelUsername, channelId: channel.id } });
+      break;
+    case "create_campaign_title":
+      state.data.title = text;
+      await setUserState(fromId, state);
+      await sendMessage(fromId, "Enter description.");
+      state.step = "create_campaign_description";
+      await setUserState(fromId, state);
+      break;
+    case "create_campaign_description":
+      state.data.description = text;
+      // ... continue with other steps (target, budget, etc.)
+      // For brevity, create campaign
+      const campaign = await createCampaign(user.id, "channel_id_placeholder", state.data); // replace channel_id
+      await sendMessage(fromId, "Campaign created!");
+      await setUserState(fromId, null);
+      break;
+    case "deposit":
+      const amount = parseFloat(text);
+      if (!isNaN(amount)) {
+        user.balance += amount;
+        await kv.set(["users", fromId], user);
+        await sendMessage(fromId, "Deposited!");
+      }
+      await setUserState(fromId, null);
+      break;
+    case "withdraw":
+      // Similar
+      await sendMessage(fromId, "Withdrawal requested.");
+      await setUserState(fromId, null);
+      break;
+    case "ai_short":
+      const example = `🚀 Join ${text} — the #1 place!`;
+      await sendMessage(fromId, example, {
+        reply_markup: { inline_keyboard: [
+          [{ text: "✅ Use This Ad", callback_data: "use_ad" }],
+          [{ text: "✍️ Edit", callback_data: "edit_ad" }],
+        ] },
+      });
+      await setUserState(fromId, null);
+      break;
+    // Add more
   }
-  return null;
 }
 
-// -------------------- Server / Webhook --------------------
-serve(async (req: Request) => {
-  try {
-    const url = new URL(req.url);
-    if (url.pathname !== SECRET_PATH) return new Response("Not found", { status: 404 });
-    if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
+// Command handler
+async function handleCommand(fromId: string, text: string, user: User, isNew: boolean) {
+  const lang = user.language;
+  const parts = text.split(" ");
 
-    const update = await req.json();
-
-    // handle normal messages
-    if (update.message) {
-      const msg = update.message;
-      if (msg.chat.type !== "private") return new Response("OK");
-      const from = msg.from;
-      const text = (msg.text || "").trim();
-      const fromId = String(from.id);
-      const username = from.username;
-      const displayName = from.first_name || from.username || fromId;
-      const lang = from.language_code === "ru" ? "ru" : from.language_code === "tk" ? "tk" : "en";
-
-      const { isNew } = await initProfile(fromId, username, displayName, lang);
-
-      if (text.startsWith("/")) {
-        await handleCommand(fromId, username, displayName, text, isNew, lang);
-      } else {
-        await handleTextInput(fromId, text, username, displayName);
+  if (text.startsWith("/start")) {
+    if (parts.length > 1 && parts[1].startsWith("ref_")) {
+      const referrerTgId = parts[1].slice(4);
+      if (isNew && referrerTgId !== fromId) {
+        const referrer = await getUser(referrerTgId);
+        if (referrer) {
+          referrer.balance += 1; // bonus
+          await kv.set(["users", referrerTgId], referrer);
+          await sendMessage(referrerTgId, "New referral bonus!");
+        }
       }
     }
-    // handle callback queries
-    else if (update.callback_query) {
-      await handleCallback(update.callback_query);
+    await sendMessage(fromId, t(lang, "welcome"), { reply_markup: getMainMenu(lang) });
+  } else if (text.startsWith("/grow")) {
+    await sendMessage(fromId, t(lang, "grow_desc"), { reply_markup: getGrowMenu(lang) });
+  } else if (text.startsWith("/earn")) {
+    await sendMessage(fromId, t(lang, "earn_desc"), { reply_markup: getEarnMenu(lang) });
+  } else if (text.startsWith("/balance")) {
+    await sendMessage(fromId, `Balance: ${user.balance}`);
+  } else if (text.startsWith("/withdraw")) {
+    await setUserState(fromId, { step: "withdraw", data: {} });
+    await sendMessage(fromId, "Enter amount.");
+  } else if (text.startsWith("/support")) {
+    await sendMessage(fromId, t(lang, "support_desc"), { reply_markup: getSupportMenu(lang) });
+  } else if (text.startsWith("/admin")) {
+    if (user.role === "admin") {
+      await sendMessage(fromId, "Admin Panel", { reply_markup: getAdminMenu(lang) });
+    } else {
+      await sendMessage(fromId, "Access denied.");
     }
-
-    return new Response("OK");
-  } catch (e) {
-    console.error("server error", e);
-    return new Response("Error", { status: 500 });
+  } else if (text.startsWith("/invite")) {
+    await sendMessage(fromId, `Referral link: https://t.me/${BOT_USERNAME}?start=ref_${fromId}`);
+  } else {
+    await sendMessage(fromId, "Unknown command.");
   }
+}
+
+// Server
+serve(async (req) => {
+  if (req.method !== "POST" || new URL(req.url).pathname !== SECRET_PATH) {
+    return new Response("Invalid", { status: 400 });
+  }
+
+  const update = await req.json();
+
+  if (update.message) {
+    const msg = update.message;
+    if (msg.chat.type !== "private") return new Response("OK");
+    const from = msg.from;
+    const text = msg.text?.trim() ?? "";
+    const fromId = from.id.toString();
+    const username = from.username;
+    const fullName = from.first_name || username || fromId;
+    const langCode = from.language_code || "en";
+    const lang: Language = LANGUAGES.includes(langCode as Language) ? langCode as Language : "en";
+
+    const user = await createOrUpdateUser(fromId, username, fullName, lang);
+
+    if (text.startsWith("/")) {
+      await handleCommand(fromId, text, user, !(await getUser(fromId))); // isNew if no user before
+    } else {
+      await handleText(fromId, text, user);
+    }
+  } else if (update.callback_query) {
+    await handleCallback(update.callback_query);
+  }
+
+  return new Response("OK");
 });
