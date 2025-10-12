@@ -11,6 +11,9 @@ if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
+// --- Admin username ---
+const ADMIN_USERNAME = "Masakoff";
+
 // --- Helper to send Telegram messages ---
 async function sendMessage(chatId: string, text: string, options: any = {}) {
   try {
@@ -100,6 +103,13 @@ serve(async (req) => {
 
   const chatId = update.message.chat.id;
   const text = (update.message.text ?? "").trim();
+  const username = update.message.from?.username ?? "";
+
+  // --- Admin check ---
+  if (username !== ADMIN_USERNAME) {
+    await sendMessage(chatId, "❌ This bot is for @Masakoff only.");
+    return new Response("OK");
+  }
 
   if (text.startsWith("/start")) {
     await sendMessage(chatId, "Welcome to Masakoff SMS Sender Bot! 🚀\nSend /send +993xxxxxxx to start sending SMS.\nUse /stop to stop sending.");
@@ -126,4 +136,5 @@ serve(async (req) => {
 
   return new Response("OK");
 });
+
 
