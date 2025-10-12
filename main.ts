@@ -102,7 +102,7 @@ async function sendSMS(phoneNumber: string, chatId: string) {
 
     await sendMessage(chatId, "⏳ Batch of 3 SMS completed. Waiting 45 seconds before next batch...");
     // Interruptible 45s pause
-    const completed45 = await sleepInterruptible(450, task, 500);
+    const completed45 = await sleepInterruptible(45000, task, 500);
     if (!completed45) break;
   }
 
