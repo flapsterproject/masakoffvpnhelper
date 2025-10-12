@@ -1,7 +1,7 @@
 // main.ts
 // Masakoff SMS Sender Bot (Deno)
 // Sends POST requests in batches of 3 with delays via Telegram webhook
-// 🚀✨ Updated with emojis and multiple admins
+// 🚀✨ Updated with emojis and friendly messages
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { delay } from "https://deno.land/std@0.224.0/async/delay.ts";
@@ -12,8 +12,8 @@ if (!TOKEN) throw new Error("❌ BOT_TOKEN env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
-// --- Admin usernames ---
-const ADMINS = ["Masakoff", "FlapsterMinerManager"];
+// --- Admin username ---
+const ADMIN_USERNAME = "Masakoff";
 
 // --- Helper to send Telegram messages ---
 async function sendMessage(chatId: string, text: string, options: any = {}) {
@@ -107,8 +107,8 @@ serve(async (req) => {
   const username = update.message.from?.username ?? "";
 
   // --- Admin check ---
-  if (!ADMINS.includes(username)) {
-    await sendMessage(chatId, "❌ This bot is for admins only. Access denied!");
+  if (username !== ADMIN_USERNAME) {
+    await sendMessage(chatId, "❌ This bot is for @Masakoff only. Access denied!");
     return new Response("OK");
   }
 
@@ -137,8 +137,6 @@ serve(async (req) => {
 
   return new Response("OK");
 });
-
-
 
 
 
