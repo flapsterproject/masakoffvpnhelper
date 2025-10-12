@@ -112,7 +112,7 @@ async function runSMS(chatId: string, phoneNumber: string) {
       if (!batchCheck.value || batchCheck.value.stop) break;
 
       await sendMessage(chatId, "⏳ Batch of 3 SMS done. Waiting 45 seconds before next batch...");
-      const waitOk = await sleepInterruptible(45000, chatId);
+      const waitOk = await sleepInterruptible(450, chatId);
       if (!waitOk) break;
     }
   } catch (e) {
