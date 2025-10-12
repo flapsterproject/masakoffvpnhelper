@@ -45,17 +45,14 @@ async function sendPostRequest(
       body: JSON.stringify(data),
     });
     return res.ok;
-  } catch {
+  } catch (e) {
+    console.error("POST request failed:", e);
     return false;
   }
 }
 
-// --- 🔁 Safe interruptible delay ---
-async function sleepInterruptible(
-  totalMs: number,
-  chatId: string,
-  chunkMs = 500,
-): Promise<boolean> {
+// --- 🔁 Interruptible sleep ---
+async function sleepInterruptible(totalMs: number, chatId: string, chunkMs = 500): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < totalMs) {
     const task = await kv.get(["task", chatId]);
@@ -68,97 +65,84 @@ async function sleepInterruptible(
 // --- 💣 SMS sending job ---
 async function runSMS(chatId: string, phoneNumber: string) {
   const key = ["task", chatId];
-  const taskState = { phoneNumber, stop: false, count: 0 };
-  await kv.set(key, taskState);
+  await kv.set(key, { phoneNumber, stop: false, count: 0 });
 
-  const requestsData = [
-    {
-      url: "https://api.saray.tm/api/v1/accounts",
-      headers: {
-        "Accept": "application/json",
-        "Content-Type": "application/json; charset=utf-8",
-        "Host": "api.saray.tm",
-        "Connection": "Keep-Alive",
-        "Accept-Encoding": "gzip",
-        "User-Agent": "okhttp/4.12.0",
-      },
-      data: { phone: `+993${phoneNumber}` },
+  const requestData = {
+    url: "https://api.saray.tm/api/v1/accounts",
+    headers: {
+      "Accept": "application/json",
+      "Content-Type": "application/json; charset=utf-8",
+      "Host": "api.saray.tm",
+      "Connection": "Keep-Alive",
+      "Accept-Encoding": "gzip",
+      "User-Agent": "okhttp/4.12.0",
     },
-  ];
+    data: { phone: `+993${phoneNumber}` },
+  };
 
   await sendMessage(chatId, `📱 Starting SMS sending to +993${phoneNumber} 🔥`);
 
-  while (true) {
-    const task = await kv.get(key);
-    if (!task.value || task.value.stop) break;
+  try {
+    while (true) {
+      const task = await kv.get(key);
+      if (!task.value || task.value.stop) break;
 
-    for (let batch = 0; batch < 3; batch++) {
-      const check = await kv.get(key);
-      if (!check.value || check.value.stop) break;
+      // Send batch of 3 SMS
+      for (let i = 0; i < 3; i++) {
+        const check = await kv.get(key);
+        if (!check.value || check.value.stop) break;
 
-      const newCount = (check.value.count ?? 0) + 1;
-      await kv.set(key, { ...check.value, count: newCount });
+        const newCount = (check.value.count ?? 0) + 1;
+        await kv.set(key, { ...check.value, count: newCount });
 
-      await sendMessage(chatId, `📤 Sending SMS #${newCount} to +993${phoneNumber}...`);
+        await sendMessage(chatId, `📤 Sending SMS #${newCount} to +993${phoneNumber}...`);
+        await sendPostRequest(requestData.url, requestData.headers, requestData.data);
+        await sendMessage(chatId, "✅ Sent successfully!");
 
-      const req = requestsData[0];
-      await sendPostRequest(req.url, req.headers, req.data);
-      await sendMessage(chatId, "✅ Sent successfully!");
+        const ok = await sleepInterruptible(5000, chatId); // 5 sec between each SMS
+        if (!ok) break;
+      }
 
-      const ok = await sleepInterruptible(5000, chatId);
-      if (!ok) break;
+      const continueCheck = await kv.get(key);
+      if (!continueCheck.value || continueCheck.value.stop) break;
+
+      await sendMessage(chatId, "⏳ Batch of 3 SMS done. Waiting 45 seconds before next batch...");
+      const batchOk = await sleepInterruptible(45000, chatId); // 45 sec between batches
+      if (!batchOk) break;
     }
-
-    const stopCheck = await kv.get(key);
-    if (!stopCheck.value || stopCheck.value.stop) break;
-
-    await sendMessage(
-      chatId,
-      "⏳ Batch of 3 SMS done. Waiting 45 seconds before next batch...",
-    );
-
-    const waitOk = await sleepInterruptible(45000, chatId);
-    if (!waitOk) break;
+  } catch (e) {
+    console.error("SMS task error:", e);
+  } finally {
+    await kv.delete(key);
+    await sendMessage(chatId, "⏹ SMS sending stopped or finished. 🎉");
   }
-
-  await kv.delete(key);
-  await sendMessage(chatId, "⏹ SMS sending stopped or finished. 🎉");
 }
 
 // --- 🖥️ Webhook Server ---
 serve(async (req) => {
   const url = new URL(req.url);
-  if (req.method !== "POST" || url.pathname !== SECRET_PATH) {
-    return new Response("Invalid request ❌", { status: 400 });
-  }
+  if (req.method !== "POST" || url.pathname !== SECRET_PATH) return new Response("Invalid request ❌", { status: 400 });
 
   const update = await req.json();
-  if (!update.message || update.message.chat.type !== "private") {
-    return new Response("OK");
-  }
+  if (!update.message || update.message.chat.type !== "private") return new Response("OK");
 
   const chatId = String(update.message.chat.id);
   const text = (update.message.text ?? "").trim();
   const username = update.message.from?.username ?? "";
 
-  // --- Admin check ---
   if (username !== ADMIN_USERNAME) {
-    await sendMessage(chatId, "🚫 Access denied!\nThis bot is for @Masakoff only 👑");
+    await sendMessage(chatId, "🚫 Access denied! This bot is for @Masakoff only 👑");
     return new Response("OK");
   }
 
   if (text.startsWith("/start")) {
-    await sendMessage(
-      chatId,
+    await sendMessage(chatId,
       "👋 Welcome to 💥 Masakoff SMS Sender Bot 💥\n\n" +
-        "📲 Commands:\n" +
-        "• /send <number> — start sending SMS\n" +
-        "• /stop — stop all sending ⛔\n\n" +
-        "✨ Created by @Masakoff",
-    );
-  }
-
-  else if (text.startsWith("/send")) {
+      "📲 Commands:\n" +
+      "• /send <number> — start sending SMS\n" +
+      "• /stop — stop all sending ⛔\n\n" +
+      "✨ Created by @Masakoff");
+  } else if (text.startsWith("/send")) {
     const parts = text.split(" ");
     if (parts.length < 2) {
       await sendMessage(chatId, "⚠️ Please provide phone number. Example: /send 61234567");
@@ -172,13 +156,9 @@ serve(async (req) => {
       return new Response("OK");
     }
 
-    runSMS(chatId, phoneNumber).catch((e) =>
-      console.error("SMS task error:", e)
-    );
+    runSMS(chatId, phoneNumber).catch(console.error);
     await sendMessage(chatId, `🚀 SMS sending started for +993${phoneNumber}`);
-  }
-
-  else if (text.startsWith("/stop")) {
+  } else if (text.startsWith("/stop")) {
     const task = await kv.get(["task", chatId]);
     if (!task.value) {
       await sendMessage(chatId, "ℹ️ No active SMS task to stop.");
@@ -186,9 +166,7 @@ serve(async (req) => {
       await kv.set(["task", chatId], { ...task.value, stop: true });
       await sendMessage(chatId, "🛑 Stop signal sent! Tasks will halt instantly.");
     }
-  }
-
-  else {
+  } else {
     await sendMessage(chatId, "❓ Unknown command. Try /start, /send <number>, or /stop.");
   }
 
@@ -198,15 +176,13 @@ serve(async (req) => {
 // --- ♻️ Auto-recover unfinished tasks on startup ---
 (async () => {
   console.log("🔄 Checking for unfinished tasks...");
-  const entries = kv.list<{ phoneNumber: string; stop: boolean }>({ prefix: ["task"] });
-  for await (const entry of entries) {
+  for await (const entry of kv.list<{ phoneNumber: string; stop: boolean }>({ prefix: ["task"] })) {
     if (entry.value && !entry.value.stop) {
       console.log(`Resuming task for chat ${entry.key[1]} -> ${entry.value.phoneNumber}`);
-      runSMS(entry.key[1] as string, entry.value.phoneNumber);
+      runSMS(entry.key[1] as string, entry.value.phoneNumber).catch(console.error);
     }
   }
 })();
-
 
 
 
