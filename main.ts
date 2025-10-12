@@ -98,6 +98,7 @@ async function sendSMS(phoneNumber: string, chatId: string) {
         await sendMessage(chatId, success ? "✅ Sent successfully!" : "⚠️ Failed to send.");
         if (task.stop) break outer;
 
+        // 5s interruptible sleep
         const completed5 = await sleepInterruptible(5000, task, 250);
         if (!completed5) break outer;
       }
@@ -106,10 +107,13 @@ async function sendSMS(phoneNumber: string, chatId: string) {
     if (task.stop) break;
 
     await sendMessage(chatId, "⏳ Batch of 3 SMS completed. Waiting 45 seconds before next batch...");
-    const completed45 = await sleepInterruptible(45000, task, 500);
+
+    // --- 💡 Interruptible 45s wait in small chunks ---
+    const completed45 = await sleepInterruptible(45000, task, 250);
     if (!completed45) break;
   }
 
+  // cleanup task only after stopping
   activeTasks.delete(chatId);
   await sendMessage(chatId, "⏹ SMS sending stopped. Thank you! 🎉");
 }
@@ -159,7 +163,7 @@ serve(async (req) => {
     if (activeTasks.size > 0) {
       for (const task of activeTasks.values()) task.stop = true;
       await sendMessage(chatId, "🛑 Stop signal sent! Tasks will halt instantly, even if waiting...");
-      activeTasks.clear();
+      // Don't clear map here; task deletes itself when stopping
     } else {
       await sendMessage(chatId, "ℹ️ No active SMS tasks found to stop.");
     }
@@ -169,6 +173,7 @@ serve(async (req) => {
 
   return new Response("OK");
 });
+
 
 
 
