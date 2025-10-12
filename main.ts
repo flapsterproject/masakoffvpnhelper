@@ -1,8 +1,7 @@
 // main.ts
 // Masakoff SMS Sender Bot (Deno)
-// Legitimate SMS sender (authorized/testing use only).
-// Created by @Masakoff
-// 🚀✨ Friendly messages, admin-only access, confirmation required before sending
+// Sends POST requests in batches of 3 with delays via Telegram webhook
+// 🚀✨ Updated with emojis and multiple admins
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { delay } from "https://deno.land/std@0.224.0/async/delay.ts";
@@ -48,7 +47,6 @@ async function sendPostRequest(url: string, headers: Record<string, string>, dat
 const activeTasks = new Map<string, { stop: boolean }>();
 
 // --- SMS sending logic ---
-// NOTE: This function assumes sending only to numbers with explicit authorization.
 async function sendSMS(phoneNumber: string, chatId: string) {
   const requestsData = [
     {
@@ -76,23 +74,20 @@ async function sendSMS(phoneNumber: string, chatId: string) {
       count++;
       for (const req of requestsData) {
         if (task.stop) break;
-        await sendMessage(chatId, `📤 Sending SMS #${count} to +993${phoneNumber} (authorized test)...`);
+        await sendMessage(chatId, `📤 Sending SMS #${count} to +993${phoneNumber}...`);
         const success = await sendPostRequest(req.url, req.headers, req.data);
-        await sendMessage(chatId, success ? "✅ Sent successfully (200 OK)" : "⛔ Failed to send (network/error).");
+        await sendMessage(chatId, success ? "✅ Sent successfully!" : "⛔ Failed to send.");
         await delay(5000); // 5s between each SMS
       }
     }
     if (task.stop) break;
-    await sendMessage(chatId, "⏳ Batch of 3 SMS completed. Waiting 45 seconds before next authorized batch...");
+    await sendMessage(chatId, "⏳ Batch of 3 SMS completed. Waiting 45 seconds before next batch...");
     await delay(45000); // 45s pause before next batch
   }
 
   activeTasks.delete(chatId);
-  await sendMessage(chatId, "⏹ SMS sending stopped. Bot by @Masakoff — authorized use only. 🎉");
+  await sendMessage(chatId, "⏹ SMS sending stopped. Thank you! 🎉");
 }
-
-// --- Simple state to hold pending confirmation per chat ---
-const pendingConfirmations = new Map<string, { phone: string }>();
 
 // --- Webhook server ---
 serve(async (req) => {
@@ -113,67 +108,36 @@ serve(async (req) => {
 
   // --- Admin check ---
   if (!ADMINS.includes(username)) {
-    await sendMessage(chatId, "❌ Access denied. This bot is for authorized admins only.");
+    await sendMessage(chatId, "❌ This bot is for admins only. Access denied!");
     return new Response("OK");
   }
 
   // --- Commands ---
   if (text.startsWith("/start")) {
-    await sendMessage(
-      chatId,
-      "👋 Welcome! This is an SMS sender bot created by @Masakoff.\n\n⚠️ IMPORTANT: This bot is for **authorized/testing** use only. Do not use it to send unsolicited messages.\n\n📲 Commands:\n/send <number> — request sending to a number (will require confirmation)\n/confirm — confirm a pending send\n/stop — stop ongoing sending\n/help — list commands"
-    );
-  } else if (text.startsWith("/help")) {
-    await sendMessage(
-      chatId,
-      "📘 Help — Authorized SMS Sender Bot\n\n/send <number> — Request to send SMS to +993<number> (will ask for confirmation first)\n/confirm — Confirm the pending send (required)\n/stop — Stop any ongoing sending for this chat\n/status — Show active sending status\n\nBot created by @Masakoff — for authorized/testing purposes only."
-    );
+    await sendMessage(chatId, "👋 Welcome to Masakoff SMS Sender Bot! 🚀\n\n📲 Use /send <number> to start sending SMS.\n⏹ Use /stop to stop sending at any time.");
   } else if (text.startsWith("/send")) {
     const parts = text.split(" ");
     if (parts.length < 2) {
       await sendMessage(chatId, "⚠️ Please provide a phone number. Example:\n/send 12345678");
     } else {
       const phoneNumber = parts[1].replace(/^\+993/, "");
-      // Store pending confirmation
-      pendingConfirmations.set(chatId.toString(), { phone: phoneNumber });
-      await sendMessage(
-        chatId,
-        `⚠️ Confirmation required.\nYou requested to start sending to +993${phoneNumber}.\nIf this is an authorized test, reply with /confirm to proceed. Otherwise, reply /cancel.`
-      );
+      await sendMessage(chatId, `🚀 Starting SMS sending to +993${phoneNumber}...`);
+      sendSMS(phoneNumber, chatId).catch(console.error);
     }
-  } else if (text === "/confirm") {
-    const pending = pendingConfirmations.get(chatId.toString());
-    if (!pending) {
-      await sendMessage(chatId, "ℹ️ No pending send request found. Use /send <number> first.");
-    } else {
-      pendingConfirmations.delete(chatId.toString());
-      await sendMessage(chatId, `🚀 Confirmed. Starting authorized sending to +993${pending.phone}...`);
-      // Start sending (non-blocking)
-      sendSMS(pending.phone, chatId).catch(console.error);
-    }
-  } else if (text === "/cancel") {
-    if (pendingConfirmations.delete(chatId.toString())) {
-      await sendMessage(chatId, "✅ Pending send request canceled.");
-    } else {
-      await sendMessage(chatId, "ℹ️ No pending request to cancel.");
-    }
-  } else if (text === "/stop") {
-    const task = activeTasks.get(chatId.toString());
+  } else if (text.startsWith("/stop")) {
+    const task = activeTasks.get(chatId);
     if (task) {
       task.stop = true;
-      await sendMessage(chatId, "⏹ Stop signal sent. Stopping authorized sending...");
     } else {
-      await sendMessage(chatId, "ℹ️ No active SMS sending found for this chat.");
+      await sendMessage(chatId, "ℹ️ No active SMS sending found.");
     }
-  } else if (text === "/status") {
-    const active = activeTasks.has(chatId.toString());
-    await sendMessage(chatId, active ? "🔴 Sending is active for this chat." : "🟢 No active sending for this chat.");
   } else {
-    await sendMessage(chatId, "❓ Unknown command. Use /help to see available commands.");
+    await sendMessage(chatId, "❓ Unknown command. Use /start, /send <number>, or /stop.");
   }
 
   return new Response("OK");
 });
+
 
 
 
