@@ -36,7 +36,7 @@ async function sendMessage(chatId: string, text: string, options: any = {}) {
 async function sendPostRequest(
   url: string,
   headers: Record<string, string>,
-  data: Record<string, any>,
+  data: Record<string, any>
 ): Promise<boolean> {
   try {
     const res = await fetch(url, {
@@ -46,7 +46,7 @@ async function sendPostRequest(
     });
     return res.ok;
   } catch (e) {
-    console.error("POST request failed:", e);
+    console.error("POST request failed ❌", e);
     return false;
   }
 }
@@ -96,22 +96,27 @@ async function runSMS(chatId: string, phoneNumber: string) {
         await kv.set(key, { ...check.value, count: newCount });
 
         await sendMessage(chatId, `📤 Sending SMS #${newCount} to +993${phoneNumber}...`);
-        await sendPostRequest(requestData.url, requestData.headers, requestData.data);
-        await sendMessage(chatId, "✅ Sent successfully!");
 
-        const ok = await sleepInterruptible(5000, chatId); // 5 sec between each SMS
-        if (!ok) break;
+        const ok = await sendPostRequest(requestData.url, requestData.headers, requestData.data);
+        if (ok) {
+          await sendMessage(chatId, "✅ Sent successfully!");
+        } else {
+          await sendMessage(chatId, "❌ Failed to send SMS. Retrying...");
+        }
+
+        const sleepOk = await sleepInterruptible(5000, chatId);
+        if (!sleepOk) break;
       }
 
-      const continueCheck = await kv.get(key);
-      if (!continueCheck.value || continueCheck.value.stop) break;
+      const batchCheck = await kv.get(key);
+      if (!batchCheck.value || batchCheck.value.stop) break;
 
       await sendMessage(chatId, "⏳ Batch of 3 SMS done. Waiting 45 seconds before next batch...");
-      const batchOk = await sleepInterruptible(45000, chatId); // 45 sec between batches
-      if (!batchOk) break;
+      const waitOk = await sleepInterruptible(45000, chatId);
+      if (!waitOk) break;
     }
   } catch (e) {
-    console.error("SMS task error:", e);
+    console.error("SMS task error ❌", e);
   } finally {
     await kv.delete(key);
     await sendMessage(chatId, "⏹ SMS sending stopped or finished. 🎉");
@@ -141,7 +146,8 @@ serve(async (req) => {
       "📲 Commands:\n" +
       "• /send <number> — start sending SMS\n" +
       "• /stop — stop all sending ⛔\n\n" +
-      "✨ Created by @Masakoff");
+      "✨ Created by @Masakoff"
+    );
   } else if (text.startsWith("/send")) {
     const parts = text.split(" ");
     if (parts.length < 2) {
@@ -183,9 +189,3 @@ serve(async (req) => {
     }
   }
 })();
-
-
-
-
-
-
