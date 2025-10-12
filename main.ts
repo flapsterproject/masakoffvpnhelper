@@ -47,9 +47,7 @@ async function sendPostRequest(url: string, headers: Record<string, string>, dat
 // --- 🧠 Track all active tasks ---
 const activeTasks = new Map<string, { stop: boolean }>();
 
-// --- ⏱ Interruptible sleep helper
-// Sleeps up to totalMs but checks `task.stop` every chunkMs and aborts if stop set.
-// Returns true if completed full sleep, false if interrupted by stop.
+// --- ⏱ Interruptible sleep helper ---
 async function sleepInterruptible(totalMs: number, task: { stop: boolean }, chunkMs = 500): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < totalMs) {
@@ -71,10 +69,10 @@ async function sendSMS(phoneNumber: string, chatId: string) {
         "Host": "api.saray.tm",
         "Connection": "Keep-Alive",
         "Accept-Encoding": "gzip",
-        "User-Agent": "okhttp/4.12.0"
+        "User-Agent": "okhttp/4.12.0",
       },
-      data: { phone: `+993${phoneNumber}` }
-    }
+      data: { phone: `+993${phoneNumber}` },
+    },
   ];
 
   const task = { stop: false };
@@ -83,30 +81,35 @@ async function sendSMS(phoneNumber: string, chatId: string) {
   let count = 0;
   await sendMessage(chatId, `📱 Starting SMS sending to +993${phoneNumber} 🔥`);
 
-  while (!task.stop) {
+  outer: while (!task.stop) {
     for (let batch = 0; batch < 3; batch++) {
-      if (task.stop) break;
+      if (task.stop) break outer;
       count++;
+
       for (const req of requestsData) {
-        if (task.stop) break;
+        if (task.stop) break outer;
+
         await sendMessage(chatId, `📤 Sending SMS #${count} to +993${phoneNumber}...`);
+        if (task.stop) break outer;
+
         const success = await sendPostRequest(req.url, req.headers, req.data);
+        if (task.stop) break outer;
+
         await sendMessage(chatId, success ? "✅ Sent successfully!" : "⚠️ Failed to send.");
-        // Interruptible 5s between each SMS
+        if (task.stop) break outer;
+
         const completed5 = await sleepInterruptible(5000, task, 250);
-        if (!completed5) break;
+        if (!completed5) break outer;
       }
     }
 
     if (task.stop) break;
 
     await sendMessage(chatId, "⏳ Batch of 3 SMS completed. Waiting 45 seconds before next batch...");
-    // Interruptible 45s pause
     const completed45 = await sleepInterruptible(45000, task, 500);
     if (!completed45) break;
   }
 
-  // cleanup
   activeTasks.delete(chatId);
   await sendMessage(chatId, "⏹ SMS sending stopped. Thank you! 🎉");
 }
@@ -119,7 +122,6 @@ serve(async (req) => {
 
   const update = await req.json();
 
-  // Only handle private messages
   if (!update.message || update.message.chat.type !== "private") {
     return new Response("OK");
   }
@@ -139,14 +141,12 @@ serve(async (req) => {
     await sendMessage(
       chatId,
       "👋 Welcome to the 💥 Masakoff SMS Sender Bot 💥\n\n" +
-      "📲 Use:\n" +
-      "• /send <number> — start sending SMS\n" +
-      "• /stop — stop all sending immediately (no number required) ⛔\n\n" +
-      "✨ Created by @Masakoff"
+        "📲 Use:\n" +
+        "• /send <number> — start sending SMS\n" +
+        "• /stop — stop all sending immediately (no number required) ⛔\n\n" +
+        "✨ Created by @Masakoff",
     );
-  }
-
-  else if (text.startsWith("/send")) {
+  } else if (text.startsWith("/send")) {
     const parts = text.split(" ");
     if (parts.length < 2) {
       await sendMessage(chatId, "⚠️ Please provide a phone number.\nExample: /send 61234567");
@@ -155,25 +155,15 @@ serve(async (req) => {
       await sendMessage(chatId, `🚀 Starting SMS sending to +993${phoneNumber}...`);
       sendSMS(phoneNumber, chatId).catch(console.error);
     }
-  }
-
-  else if (text.startsWith("/stop")) {
-    // Global stop — no phone number needed
+  } else if (text.startsWith("/stop")) {
     if (activeTasks.size > 0) {
-      for (const task of activeTasks.values()) {
-        task.stop = true;
-      }
-      // Note: tasks will reply to their respective chats that they stopped once they exit,
-      // but we also send an immediate confirmation to the admin who invoked /stop.
-      await sendMessage(chatId, "🛑 All running SMS tasks have been signalled to stop. They will stop immediately, even if waiting.");
-      // clear the map to avoid stale entries (tasks also delete themselves when finishing)
+      for (const task of activeTasks.values()) task.stop = true;
+      await sendMessage(chatId, "🛑 Stop signal sent! Tasks will halt instantly, even if waiting...");
       activeTasks.clear();
     } else {
       await sendMessage(chatId, "ℹ️ No active SMS tasks found to stop.");
     }
-  }
-
-  else {
+  } else {
     await sendMessage(chatId, "❓ Unknown command.\nTry /start, /send <number>, or /stop.");
   }
 
