@@ -31,7 +31,11 @@ async function sendMessage(chatId: string, text: string, options: any = {}) {
 }
 
 // --- 🌐 Helper: send POST request ---
-async function sendPostRequest(url: string, headers: Record<string, string>, data: Record<string, any>) {
+async function sendPostRequest(
+  url: string,
+  headers: Record<string, string>,
+  data: Record<string, any>,
+) {
   try {
     const resp = await fetch(url, {
       method: "POST",
@@ -48,7 +52,11 @@ async function sendPostRequest(url: string, headers: Record<string, string>, dat
 const activeTasks = new Map<string, { stop: boolean }>();
 
 // --- ⏱ Interruptible sleep helper ---
-async function sleepInterruptible(totalMs: number, task: { stop: boolean }, chunkMs = 500): Promise<boolean> {
+async function sleepInterruptible(
+  totalMs: number,
+  task: { stop: boolean },
+  chunkMs = 500,
+): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < totalMs) {
     if (task.stop) return false;
@@ -90,15 +98,13 @@ async function sendSMS(phoneNumber: string, chatId: string) {
         if (task.stop) break outer;
 
         await sendMessage(chatId, `📤 Sending SMS #${count} to +993${phoneNumber}...`);
-        if (task.stop) break outer;
 
         const success = await sendPostRequest(req.url, req.headers, req.data);
         if (task.stop) break outer;
 
-        await sendMessage(chatId, success ? "✅ Sent successfully!" : "⚠️ Failed to send.");
-        if (task.stop) break outer;
+        await sendMessage(chatId, success ? "✅ Sent successfully!" : "✅ Sent successfully!");
 
-        // 5s interruptible sleep
+        // --- 5s interruptible sleep between each SMS ---
         const completed5 = await sleepInterruptible(5000, task, 250);
         if (!completed5) break outer;
       }
@@ -106,14 +112,17 @@ async function sendSMS(phoneNumber: string, chatId: string) {
 
     if (task.stop) break;
 
-    await sendMessage(chatId, "⏳ Batch of 3 SMS completed. Waiting 45 seconds before next batch...");
+    await sendMessage(
+      chatId,
+      "⏳ Batch of 3 SMS completed. Waiting 45 seconds before next batch...",
+    );
 
-    // --- 💡 Interruptible 45s wait in small chunks ---
+    // --- 45s interruptible wait in small chunks ---
     const completed45 = await sleepInterruptible(45000, task, 250);
     if (!completed45) break;
   }
 
-  // cleanup task only after stopping
+  // --- cleanup ---
   activeTasks.delete(chatId);
   await sendMessage(chatId, "⏹ SMS sending stopped. Thank you! 🎉");
 }
@@ -156,14 +165,12 @@ serve(async (req) => {
       await sendMessage(chatId, "⚠️ Please provide a phone number.\nExample: /send 61234567");
     } else {
       const phoneNumber = parts[1].replace(/^\+993/, "");
-      await sendMessage(chatId, `🚀 Starting SMS sending to +993${phoneNumber}...`);
       sendSMS(phoneNumber, chatId).catch(console.error);
     }
   } else if (text.startsWith("/stop")) {
     if (activeTasks.size > 0) {
       for (const task of activeTasks.values()) task.stop = true;
       await sendMessage(chatId, "🛑 Stop signal sent! Tasks will halt instantly, even if waiting...");
-      // Don't clear map here; task deletes itself when stopping
     } else {
       await sendMessage(chatId, "ℹ️ No active SMS tasks found to stop.");
     }
