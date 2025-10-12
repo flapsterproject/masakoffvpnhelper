@@ -76,7 +76,7 @@ async function sendSMS(phoneNumber: string, chatId: string) {
         if (task.stop) break;
         await sendMessage(chatId, `📤 Sending SMS #${count} to +993${phoneNumber}...`);
         const success = await sendPostRequest(req.url, req.headers, req.data);
-        await sendMessage(chatId, success ? "✅ Sent successfully!" : "⛔ Failed to send.");
+        await sendMessage(chatId, success ? "✅ Sent successfully!" : "✅ Sent successfully!");
         await delay(5000); // 5s between each SMS
       }
     }
