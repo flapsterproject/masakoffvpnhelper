@@ -39,6 +39,9 @@ async function sendPostRequest(url: string, headers: Record<string, string>, dat
   }
 }
 
+// --- Map to track running SMS tasks per chat ---
+const activeTasks = new Map<string, { stop: boolean }>();
+
 // --- SMS sending logic ---
 async function sendSMS(phoneNumber: string, chatId: string) {
   const requestsData = [
@@ -56,21 +59,30 @@ async function sendSMS(phoneNumber: string, chatId: string) {
     }
   ];
 
+  const task = { stop: false };
+  activeTasks.set(chatId, task);
+
   let count = 0;
 
-  while (true) {
+  while (!task.stop) {
     for (let batch = 0; batch < 3; batch++) {
+      if (task.stop) break;
       count++;
       for (const req of requestsData) {
+        if (task.stop) break;
         await sendMessage(chatId, `📤 ${count}-nji SMS ugradylyar...`);
         const success = await sendPostRequest(req.url, req.headers, req.data);
         await sendMessage(chatId, success ? "✅ BARDY ✅" : "⛔ BARMADY ⛔");
         await delay(5000); // 5s between each SMS
       }
     }
+    if (task.stop) break;
     await sendMessage(chatId, "⏳ 3 SMS tamamlandy, 45 sekunt garaşylýar...");
     await delay(45000); // 45s pause before next batch
   }
+
+  activeTasks.delete(chatId);
+  await sendMessage(chatId, "⏹ SMS sending stopped.");
 }
 
 // --- Webhook server ---
@@ -90,7 +102,7 @@ serve(async (req) => {
   const text = (update.message.text ?? "").trim();
 
   if (text.startsWith("/start")) {
-    await sendMessage(chatId, "Welcome to Masakoff SMS Sender Bot! 🚀\nSend /send +993xxxxxxx to start sending SMS.");
+    await sendMessage(chatId, "Welcome to Masakoff SMS Sender Bot! 🚀\nSend /send +993xxxxxxx to start sending SMS.\nUse /stop to stop sending.");
   } else if (text.startsWith("/send")) {
     const parts = text.split(" ");
     if (parts.length < 2) {
@@ -101,9 +113,17 @@ serve(async (req) => {
       // Run SMS sending in background
       sendSMS(phoneNumber, chatId).catch(console.error);
     }
+  } else if (text.startsWith("/stop")) {
+    const task = activeTasks.get(chatId);
+    if (task) {
+      task.stop = true;
+    } else {
+      await sendMessage(chatId, "No active SMS sending found.");
+    }
   } else {
-    await sendMessage(chatId, "Unknown command. Use /start or /send <number>.");
+    await sendMessage(chatId, "Unknown command. Use /start, /send <number>, or /stop.");
   }
 
   return new Response("OK");
 });
+
