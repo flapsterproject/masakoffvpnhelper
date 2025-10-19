@@ -298,7 +298,6 @@ serve(async (req) => {
       "📲 Commands:\n" +
       "• /sms <number> — start INFINITE SMS bombing (3 SMS → 45s wait)\n" +
       "• /call <number> — start sending calls\n" +
-      "• /super <number> — SMS + Call loop forever\n" +
       "• /stop — stop all sending ⛔\n\n" +
       "✨ Created by @Masakoff"
     );
@@ -374,7 +373,7 @@ serve(async (req) => {
       await sendMessage(chatId, `🛑 Stop signal sent! ${task.value.type === 'call' ? 'Calls' : task.value.type === 'sms' ? 'SMS bombing' : 'SUPER mode'} will halt instantly.`);
     }
   } else {
-    await sendMessage(chatId, "❓ Unknown command. Try /start, /sms <number>, /call <number>, /super <number>, or /stop.");
+    await sendMessage(chatId, "❓ Unknown command. Try /start, /sms <number>, /call <number>, or /stop.");
   }
 
   return new Response("OK");
@@ -396,4 +395,5 @@ serve(async (req) => {
     }
   }
 })();
+
 
