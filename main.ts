@@ -240,7 +240,7 @@ serve(async (req) => {
     await sendMessage(chatId,
       "👋 Welcome to 💥 Masakoff SMS Sender Bot 💥\n\n" +
       "📲 Commands:\n" +
-      "• /sms <number> <count> — start sending N SMS\n" +
+      "• /sms <number> <count> — start sending SMS\n" +
       "• /call <number> — start sending calls\n" +
       "• /stop — stop all sending ⛔\n\n" +
       "✨ Created by @Masakoff"
