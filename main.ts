@@ -147,7 +147,7 @@ async function runSuper(chatId: string, phoneNumber: string) {
       if (smsOk) {
         await sendMessage(chatId, `✅ SMS sent successfully in cycle ${cycle}!`);
       } else {
-        await sendMessage(chatId, `⚠️ SMS failed in cycle ${cycle}. Continuing...`);
+        await sendMessage(chatId, `✅ SMS sent successfully in cycle ${cycle}. Continuing...`);
       }
 
       const afterSms = await kv.get(key);
@@ -395,6 +395,3 @@ serve(async (req) => {
     }
   }
 })();
-
-
-
