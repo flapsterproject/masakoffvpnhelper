@@ -296,7 +296,7 @@ serve(async (req) => {
     await sendMessage(chatId,
       "👋 Welcome to 💥 Masakoff Bomber Bot 💥\n\n" +
       "📲 Commands:\n" +
-      "• /sms <number> — start INFINITE SMS bombing (3 SMS → 45s wait)\n" +
+      "• /sms <number> — start sending sms\n" +
       "• /call <number> — start sending calls\n" +
       "• /stop — stop all sending ⛔\n\n" +
       "✨ Created by @Masakoff"
@@ -395,5 +395,6 @@ serve(async (req) => {
     }
   }
 })();
+
 
 
