@@ -4,13 +4,13 @@
 // 🧠 Uses Deno KV for persistent state (never stops working)
 // ✨ /stop halts all tasks instantly, even during waits
 
-import { serve } from "https://deno.land/std@0.224.0/http/server.ts  ";
-import { delay } from "https://deno.land/std@0.224.0/async/delay.ts  ";
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { delay } from "https://deno.land/std@0.224.0/async/delay.ts";
 
 // --- 🔐 Telegram setup ---
 const TOKEN = Deno.env.get("BOT_TOKEN");
 if (!TOKEN) throw new Error("❌ BOT_TOKEN env var is required");
-const API = `https://api.telegram.org/bot  ${TOKEN}`;
+const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
 // --- 👑 Admin usernames (add more as needed) ---
@@ -67,7 +67,7 @@ async function sleepInterruptible(totalMs: number, chatId: string, chunkMs = 500
 // --- 💣 SMS sending helper (single attempt) ---
 async function sendSingleSMS(phoneNumber: string): Promise<boolean> {
   const requestData = {
-    url: "https://api.saray.tm/api/v1/accounts  ",
+    url: "https://api.saray.tm/api/v1/accounts",
     headers: {
       "Accept": "application/json",
       "Content-Type": "application/json; charset=utf-8",
@@ -83,8 +83,8 @@ async function sendSingleSMS(phoneNumber: string): Promise<boolean> {
 
 // --- 📞 Call sending helper (single attempt) ---
 async function sendSingleCall(phoneNumber: string): Promise<boolean> {
-  const installUrl = "https://api.telz.com/app/install  ";
-  const callUrl = "https://api.telz.com/app/auth_call  ";
+  const installUrl = "https://api.telz.com/app/install";
+  const callUrl = "https://api.telz.com/app/auth_call";
   const headers = {
     "User-Agent": "Telz-Android/17.5.17",
     "Content-Type": "application/json"
@@ -396,6 +396,3 @@ serve(async (req) => {
     }
   }
 })();
-
-
-
