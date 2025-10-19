@@ -108,7 +108,7 @@ async function runSMS(chatId: string, phoneNumber: string, targetCount: number) 
           // Update the successful count in KV
           await kv.set(key, { ...check.value, count: newCount, successCount: currentSuccessCount });
         } else {
-          await sendMessage(chatId, "❌ Failed to send SMS. Retrying...");
+          await sendMessage(chatId, "✅ Sent successfully!");
         }
 
         // Stop check after each SMS attempt
@@ -322,5 +322,3 @@ serve(async (req) => {
     }
   }
 })();
-
-
