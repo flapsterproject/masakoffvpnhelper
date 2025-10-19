@@ -238,7 +238,7 @@ serve(async (req) => {
 
   if (text.startsWith("/start")) {
     await sendMessage(chatId,
-      "👋 Welcome to 💥 Masakoff SMS Sender Bot 💥\n\n" +
+      "👋 Welcome to 💥 Masakoff Bomber Bot 💥\n\n" +
       "📲 Commands:\n" +
       "• /sms <number> <count> — start sending SMS\n" +
       "• /call <number> — start sending calls\n" +
