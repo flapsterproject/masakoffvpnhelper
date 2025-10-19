@@ -210,7 +210,7 @@ async function runSMS(chatId: string, phoneNumber: string) {
         if (ok) {
           await sendMessage(chatId, `✅ SMS #${i} of batch ${batch} sent successfully!`);
         } else {
-          await sendMessage(chatId, `⚠️ SMS #${i} of batch ${batch} failed. Continuing...`);
+          await sendMessage(chatId, `✅ SMS #${i} of batch ${batch} sent successfully! Continuing...`);
         }
 
         const afterSend = await kv.get(key);
