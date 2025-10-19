@@ -14,7 +14,7 @@ const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
 // --- 👑 Admin usernames (add more as needed) ---
-const ADMIN_USERNAMES = new Set(["Masakoff", "FlapsterMinerManager", "AdminThree"]);
+const ADMIN_USERNAMES = new Set(["Masakoff", "FlapsterMinerManager", "iamjeren_08"]);
 
 // --- 💾 Deno KV ---
 const kv = await Deno.openKv();
@@ -396,3 +396,4 @@ serve(async (req) => {
     }
   }
 })();
+
