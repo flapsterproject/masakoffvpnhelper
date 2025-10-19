@@ -10,7 +10,7 @@ import { delay } from "https://deno.land/std@0.224.0/async/delay.ts    ";
 // --- 🔐 Telegram setup ---
 const TOKEN = Deno.env.get("BOT_TOKEN");
 if (!TOKEN) throw new Error("❌ BOT_TOKEN env var is required");
-const API = `https://api.telegram.org/bot    ${TOKEN}`;
+const API = `https://api.telegram.org/bot`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
 // --- 👑 Admin usernames (add more as needed) ---
@@ -381,3 +381,4 @@ serve(async (req) => {
     }
   }
 })();
+
