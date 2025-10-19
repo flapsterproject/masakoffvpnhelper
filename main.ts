@@ -116,11 +116,7 @@ async function login(chatId: string, username: string, password: string) {
   const csrf = await getCsrf(headers, guid);
   const data = { phone_id: phone, _csrftoken: csrf, username, guid, device_id: device, password, login_attempt_count: 0 };
   const dataStr = JSON.stringify(data);
-  const keyBytes = new TextEncoder().encode(IG_SIG);
-  const messageBytes = new TextEncoder().encode(dataStr);
-  const cryptoKey = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const signature = await crypto.subtle.sign("HMAC", cryptoKey, messageBytes);
-  const hmacHex = Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, '0')).join('');
+  const hmacHex = await hmacSign(dataStr);
   const form = new FormData();
   form.append("signed_body", `${hmacHex}.${dataStr}`);
   form.append("ig_sig_key_version", "4");
@@ -254,8 +250,20 @@ async function trackUnfollowers(chatId: string, loggedUser: string, cookie: stri
   await kv.set(key, current);
 }
 
+async function hmacSign(data: string) {
+  const keyBytes = new TextEncoder().encode(IG_SIG);
+  const messageBytes = new TextEncoder().encode(data);
+  const cryptoKey = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const signature = await crypto.subtle.sign("HMAC", cryptoKey, messageBytes);
+  return Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function delay(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function increaseFollowers(chatId: string, loggedUser: string, cookie: string) {
-  await sendMessage(chatId, "This technique consists of following/unfollowing celebgrams");
+  await sendMessage(chatId, "This technique consists of following/unfolling celebgrams");
   await sendMessage(chatId, "It can increase your followers up to about +30 in 1 hour");
   await sendMessage(chatId, "Press Ctrl + C to stop (but since it's a bot, it will run in loop until error)");
   const userId = await getUserId(loggedUser);
@@ -291,18 +299,6 @@ async function increaseFollowers(chatId: string, loggedUser: string, cookie: str
     }
     await delay(60000);
   }
-}
-
-async function hmacSign(data: string) {
-  const keyBytes = new TextEncoder().encode(IG_SIG);
-  const messageBytes = new TextEncoder().encode(data);
-  const cryptoKey = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const signature = await crypto.subtle.sign("HMAC", cryptoKey, messageBytes);
-  return Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function delay(ms: number) {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function getStory(chatId: string, loggedUser: string, cookie: string, userAccount: string) {
@@ -506,6 +502,19 @@ serve(async (req) => {
         return new Response("ok");
       }
 
+      if (text.startsWith("/plussubs")) {
+        const parts = text.split(" ");
+        if (parts.length < 2) {
+          await sendMessage(chatId, "Usage: /plussubs <instagram username>");
+          return new Response("ok");
+        }
+        const username = parts[1];
+        await kv.set(["temp", chatId, "ig_username"], username);
+        await sendMessage(chatId, `Password for ${username}: `);
+        await kv.set(["states", chatId], "asking_password_for_plussubs");
+        return new Response("ok");
+      }
+
       const stateRes = await kv.get(["states", chatId]);
       const state = stateRes.value as string | null;
 
@@ -523,6 +532,22 @@ serve(async (req) => {
         if (success) {
           await kv.set(["states", chatId], "logged_in");
           await sendMenu(chatId);
+        } else {
+          await kv.set(["states", chatId], null);
+        }
+        await kv.delete(["temp", chatId, "ig_username"]);
+        return new Response("ok");
+      }
+
+      if (state === "asking_password_for_plussubs") {
+        const usernameRes = await kv.get(["temp", chatId, "ig_username"]);
+        const username = usernameRes.value as string;
+        const success = await login(chatId, username, text);
+        if (success) {
+          await kv.set(["states", chatId], "logged_in");
+          const cookieRes = await kv.get(["users", chatId, "ig_cookie"]);
+          const cookie = cookieRes.value as string;
+          await increaseFollowers(chatId, username, cookie);
         } else {
           await kv.set(["states", chatId], null);
         }
@@ -557,3 +582,4 @@ serve(async (req) => {
 
   return new Response("ok");
 });
+
