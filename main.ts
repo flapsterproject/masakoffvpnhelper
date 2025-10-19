@@ -13,8 +13,8 @@ if (!TOKEN) throw new Error("❌ BOT_TOKEN env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
-// --- 👑 Admin username ---
-const ADMIN_USERNAME = ["Masakoff" , "FlapsterMinerManager"];
+// --- 👑 Admin usernames (add more as needed) ---
+const ADMIN_USERNAMES = new Set(["Masakoff", "FlapsterMinerManager", "AdminThree"]);
 
 // --- 💾 Deno KV ---
 const kv = await Deno.openKv();
@@ -231,8 +231,8 @@ serve(async (req) => {
   const text = (update.message.text ?? "").trim();
   const username = update.message.from?.username ?? "";
 
-  if (username !== ADMIN_USERNAME) {
-    await sendMessage(chatId, "🚫 Access denied! This bot is for @Masakoff only 👑");
+  if (!ADMIN_USERNAMES.has(username)) {
+    await sendMessage(chatId, "🚫 Access denied! This bot is restricted to authorized admins only 👑");
     return new Response("OK");
   }
 
@@ -248,7 +248,7 @@ serve(async (req) => {
   } else if (text.startsWith("/sms")) {
     const parts = text.split(" ");
     if (parts.length < 3) {
-      await sendMessage(chatId, "⚠️ Please provide phone number and count. Example: /send 61234567 10");
+      await sendMessage(chatId, "⚠️ Please provide phone number and count. Example: /sms 61234567 10");
       return new Response("OK");
     }
 
@@ -322,9 +322,5 @@ serve(async (req) => {
     }
   }
 })();
-
-
-
-
 
 
