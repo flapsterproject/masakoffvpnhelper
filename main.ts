@@ -14,7 +14,7 @@ const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper";
 
 // --- 👑 Admin username ---
-const ADMIN_USERNAME = "Masakoff";
+const ADMIN_USERNAME = ["Masakoff" , "FlapsterMinerManager"];
 
 // --- 💾 Deno KV ---
 const kv = await Deno.openKv();
@@ -240,12 +240,12 @@ serve(async (req) => {
     await sendMessage(chatId,
       "👋 Welcome to 💥 Masakoff SMS Sender Bot 💥\n\n" +
       "📲 Commands:\n" +
-      "• /send <number> <count> — start sending N SMS\n" +
+      "• /sms <number> <count> — start sending N SMS\n" +
       "• /call <number> — start sending calls\n" +
       "• /stop — stop all sending ⛔\n\n" +
       "✨ Created by @Masakoff"
     );
-  } else if (text.startsWith("/send")) {
+  } else if (text.startsWith("/sms")) {
     const parts = text.split(" ");
     if (parts.length < 3) {
       await sendMessage(chatId, "⚠️ Please provide phone number and count. Example: /send 61234567 10");
@@ -300,7 +300,7 @@ serve(async (req) => {
       await sendMessage(chatId, `🛑 Stop signal sent! ${task.value.type === 'call' ? 'Calls' : 'SMS'} will halt instantly.`);
     }
   } else {
-    await sendMessage(chatId, "❓ Unknown command. Try /start, /send <number> <count>, /call <number>, or /stop.");
+    await sendMessage(chatId, "❓ Unknown command. Try /start, /sms <number> <count>, /call <number>, or /stop.");
   }
 
   return new Response("OK");
@@ -322,6 +322,7 @@ serve(async (req) => {
     }
   }
 })();
+
 
 
 
