@@ -26,7 +26,8 @@ async function sendMessage(chatId: string | number, text: string, options: any =
 // -------------------- Gemini Response Generator --------------------
 async function generateResponse(prompt: string): Promise<string> {
   try {
-    const result = await model.generateContent(prompt);
+    const fullPrompt = `Respond to this with sarcasm, very short, and with emojis: ${prompt}`;
+    const result = await model.generateContent(fullPrompt);
     return result.response.text();
   } catch (error) {
     console.error("Gemini error:", error);
@@ -54,4 +55,3 @@ serve(async (req) => {
 
   return new Response("ok");
 });
-
