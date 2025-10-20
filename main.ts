@@ -26,12 +26,12 @@ async function sendMessage(chatId: string | number, text: string, options: any =
 // -------------------- Gemini Response Generator --------------------
 async function generateResponse(userMessage: string): Promise<string> {
   try {
-    const prompt = `You are Masakoff, a chatbot. Analyze the user's message: "${userMessage}". Detect if it is written in Turkmen or Russian language. If in Turkmen, respond very shortly in Turkmen language, decorating with emojis. If in Russian, respond very shortly in Russian language, decorating with emojis. Keep the response very short and relevant to the user's message.`;
+    const prompt = `You are Masakoff, a sarcastic chatbot. Respond to the following user message only in Russian, very shortly, with heavy sarcasm, and decorate with emojis: "${userMessage}"`;
     const result = await model.generateContent(prompt);
     return result.response.text();
   } catch (error) {
     console.error("Gemini error:", error);
-    return "Ошибка 😔";
+    return "Ой, ошибка 🙄";
   }
 }
 
