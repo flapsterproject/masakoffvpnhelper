@@ -3,6 +3,8 @@
 // Features: AI chat, profiles with stats (Puter KV), leaderboard with pagination, admin (/addtouser)
 // Notes: Requires BOT_TOKEN and PUTER_TOKEN env vars. Deploy as webhook at SECRET_PATH.
 // Uses Puter API for KV storage and Gemini for AI responses.
+// To get PUTER_TOKEN: Sign up at puter.com, then generate an access token from your account settings or API section.
+// The access token should have permissions for chat-completion and KV.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
@@ -43,7 +45,7 @@ const puterKV = {
       method: "get",
       args: { key: path },
     });
-    return data ?? null;
+    return data?.result ?? null;
   },
   async set(key: string[], value: any): Promise<void> {
     const path = key.join("/");
@@ -61,7 +63,7 @@ const puterKV = {
       method: "list",
       args: { prefix: prefix.join("/") },
     });
-    return data?.map((item: any) => ({ key: item.key.split("/"), value: item.value })) ?? [];
+    return data?.result?.map((item: any) => ({ key: item.key.split("/"), value: item.value })) ?? [];
   },
 };
 
@@ -69,17 +71,17 @@ const puterKV = {
 async function aiChat(prompt: string): Promise<string> {
   const data = await callPuterAPI({
     interface: "puter-chat-completion",
-    driver: "google-gemini",
+    driver: "gemini",
     method: "complete",
     args: {
       messages: [
         { role: "system", content: "You are a helpful assistant." },
         { role: "user", content: prompt },
       ],
-      model: "google/gemini-2.5-pro-exp-03-25:free",
+      model: "google/gemini-2.5-flash",
     },
   });
-  return data?.text ?? "Sorry, I couldn't generate a response.";
+  return data?.result?.message?.content ?? "Sorry, I couldn't generate a response.";
 }
 
 // -------------------- Telegram helpers --------------------
@@ -350,4 +352,5 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
+
 
