@@ -10,7 +10,7 @@ const SECRET_PATH = "/masakoffvpnhelper";
 // Gemini setup
 const GEMINI_API_KEY = "AIzaSyC2tKj3t5oTsrr_a0B1mDxtJcdyeq5uL0U";
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
 // -------------------- Telegram Helpers --------------------
 async function sendMessage(chatId: string | number, text: string, options: any = {}) {
@@ -24,14 +24,13 @@ async function sendMessage(chatId: string | number, text: string, options: any =
 }
 
 // -------------------- Gemini Response Generator --------------------
-async function generateResponse(userMessage: string): Promise<string> {
+async function generateResponse(prompt: string): Promise<string> {
   try {
-    const prompt = `You are Masakoff, a sarcastic chatbot. Respond to the following user message only in Russian, very shortly, with heavy sarcasm, and decorate with emojis: "${userMessage}"`;
     const result = await model.generateContent(prompt);
     return result.response.text();
   } catch (error) {
     console.error("Gemini error:", error);
-    return "Ой, ошибка 🙄";
+    return "Sorry, an error occurred while generating the response.";
   }
 }
 
@@ -55,3 +54,4 @@ serve(async (req) => {
 
   return new Response("ok");
 });
+
