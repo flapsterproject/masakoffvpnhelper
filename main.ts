@@ -1,6 +1,6 @@
 // main.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { GoogleGenerativeAI } from "npm:@google/generative-ai@^0.19.0";  // Use a recent version; check for updates if needed
+import { GoogleGenerativeAI } from "npm:@google/generative-ai@^0.19.0";
 
 // Telegram setup
 const TOKEN = Deno.env.get("BOT_TOKEN");
@@ -13,11 +13,20 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
 // -------------------- Telegram Helpers --------------------
-async function sendMessage(chatId: string | number, text: string, options: any = {}) {
+async function sendMessage(
+  chatId: string | number,
+  text: string,
+  replyToMessageId?: number,
+) {
   const res = await fetch(`${API}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text, ...options }),
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      reply_to_message_id: replyToMessageId, // reply to original message
+      allow_sending_without_reply: true,
+    }),
   });
   const data = await res.json();
   return data.result?.message_id;
@@ -26,12 +35,13 @@ async function sendMessage(chatId: string | number, text: string, options: any =
 // -------------------- Gemini Response Generator --------------------
 async function generateResponse(prompt: string): Promise<string> {
   try {
-    const fullPrompt = `Respond as a witty, realistic human — use sarcasm, keep it very short (1–2 sentences), add emojis, and write naturally in Russian, as if chatting with a friend online: ${prompt}`;
+    const fullPrompt =
+      `Respond as a witty, realistic human — use sarcasm, keep it very short (1–2 sentences), add emojis, and write naturally in Russian, as if chatting with a friend online: ${prompt}`;
     const result = await model.generateContent(fullPrompt);
     return result.response.text();
   } catch (error) {
     console.error("Gemini error:", error);
-    return "Sorry, an error occurred while generating the response.";
+    return "Извини, я завис 🤖💤";
   }
 }
 
@@ -43,10 +53,11 @@ serve(async (req) => {
     if (update.message) {
       const chatId = String(update.message.chat.id);
       const text = update.message.text;
+      const messageId = update.message.message_id;
 
       if (text) {
         const botResponse = await generateResponse(text);
-        await sendMessage(chatId, botResponse);
+        await sendMessage(chatId, botResponse, messageId);
       }
     }
   } catch (err) {
@@ -55,5 +66,3 @@ serve(async (req) => {
 
   return new Response("ok");
 });
-
-
