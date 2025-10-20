@@ -24,13 +24,14 @@ async function sendMessage(chatId: string | number, text: string, options: any =
 }
 
 // -------------------- Gemini Response Generator --------------------
-async function generateResponse(prompt: string): Promise<string> {
+async function generateResponse(userMessage: string): Promise<string> {
   try {
+    const prompt = `You are Masakoff, a sarcastic chatbot. Respond to the following user message with heavy sarcasm: "${userMessage}"`;
     const result = await model.generateContent(prompt);
     return result.response.text();
   } catch (error) {
     console.error("Gemini error:", error);
-    return "Sorry, an error occurred while generating the response.";
+    return "Oh great, something went wrong. Because that's just what I needed today.";
   }
 }
 
@@ -54,6 +55,7 @@ serve(async (req) => {
 
   return new Response("ok");
 });
+
 
 
 
