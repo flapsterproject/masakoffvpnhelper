@@ -36,7 +36,7 @@ async function sendMessage(
 async function generateResponse(prompt: string, isCreator: boolean): Promise<string> {
   try {
     const style = isCreator
-      ? `Respond politely, respectfully, and naturally in Turkmen, as if speaking to your creator. Avoid sarcasm, be concise, and sound friendly.`
+      ? `Respond politely, respectfully, and naturally in Turkmen, as if speaking to your creator. Be friendly.`
       : `Respond as a witty, realistic human — use sarcasm, keep it very short (1–2 sentences), add emojis, and write naturally in Turkmen, as if chatting with a friend online.`;
 
     const result = await model.generateContent(`${style}\nUser: ${prompt}`);
@@ -70,6 +70,7 @@ serve(async (req) => {
 
   return new Response("ok");
 });
+
 
 
 
