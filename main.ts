@@ -2,12 +2,12 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { GoogleGenerativeAI } from "npm:@google/generative-ai@^0.19.0";
 
-// Telegram setup
+// -------------------- Telegram Setup --------------------
 const TOKEN = Deno.env.get("BOT_TOKEN");
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffrobot";
 
-// Gemini setup
+// -------------------- Gemini Setup --------------------
 const GEMINI_API_KEY = "AIzaSyC2tKj3t5oTsrr_a0B1mDxtJcdyeq5uL0U";
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
@@ -24,7 +24,7 @@ async function sendMessage(
     body: JSON.stringify({
       chat_id: chatId,
       text,
-      reply_to_message_id: replyToMessageId, // reply to original message
+      reply_to_message_id: replyToMessageId,
       allow_sending_without_reply: true,
     }),
   });
@@ -33,10 +33,13 @@ async function sendMessage(
 }
 
 // -------------------- Gemini Response Generator --------------------
-async function generateResponse(prompt: string): Promise<string> {
+async function generateResponse(prompt: string, isCreator: boolean): Promise<string> {
   try {
-    const fullPrompt =`Respond as a witty, realistic human — use sarcasm, keep it very short (1–2 sentences), add emojis, and write naturally in Turkmen, as if chatting with a friend online: ${prompt}`;
-    const result = await model.generateContent(fullPrompt);
+    const style = isCreator
+      ? `Respond politely, naturally, and respectfully — as if speaking to your creator. Avoid sarcasm, be concise, and use a friendly tone in Turkmen.`
+      : `Respond as a witty, realistic human — use sarcasm, keep it very short (1–2 sentences), add emojis, and write naturally in Turkmen, as if chatting with a friend online.`;
+
+    const result = await model.generateContent(`${style}\nUser: ${prompt}`);
     return result.response.text();
   } catch (error) {
     console.error("Gemini error:", error);
@@ -53,9 +56,11 @@ serve(async (req) => {
       const chatId = String(update.message.chat.id);
       const text = update.message.text;
       const messageId = update.message.message_id;
+      const username = update.message.from?.username || "";
 
       if (text) {
-        const botResponse = await generateResponse(text);
+        const isCreator = username === "Masakoff"; // 👑 Creator check
+        const botResponse = await generateResponse(text, isCreator);
         await sendMessage(chatId, botResponse, messageId);
       }
     }
@@ -65,3 +70,5 @@ serve(async (req) => {
 
   return new Response("ok");
 });
+
+
