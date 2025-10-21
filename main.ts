@@ -2,12 +2,12 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { GoogleGenerativeAI } from "npm:@google/generative-ai@^0.19.0";
 
-// -------------------- Telegram Setup --------------------
+// Telegram setup
 const TOKEN = Deno.env.get("BOT_TOKEN");
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffrobot";
 
-// -------------------- Gemini Setup --------------------
+// Gemini setup
 const GEMINI_API_KEY = "AIzaSyC2tKj3t5oTsrr_a0B1mDxtJcdyeq5uL0U";
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
@@ -36,7 +36,7 @@ async function sendMessage(
 async function generateResponse(prompt: string, isCreator: boolean): Promise<string> {
   try {
     const style = isCreator
-      ? `Respond politely, naturally, and respectfully — as if speaking to your creator. Avoid sarcasm, be concise, and use a friendly tone in Turkmen.`
+      ? `Respond politely, respectfully, and naturally in Turkmen, as if speaking to your creator. Avoid sarcasm, be concise, and sound friendly.`
       : `Respond as a witty, realistic human — use sarcasm, keep it very short (1–2 sentences), add emojis, and write naturally in Turkmen, as if chatting with a friend online.`;
 
     const result = await model.generateContent(`${style}\nUser: ${prompt}`);
@@ -59,7 +59,7 @@ serve(async (req) => {
       const username = update.message.from?.username || "";
 
       if (text) {
-        const isCreator = username === "Masakoff"; // 👑 Creator check
+        const isCreator = username === "Masakoff";
         const botResponse = await generateResponse(text, isCreator);
         await sendMessage(chatId, botResponse, messageId);
       }
@@ -70,5 +70,6 @@ serve(async (req) => {
 
   return new Response("ok");
 });
+
 
 
