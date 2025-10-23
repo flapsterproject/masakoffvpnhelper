@@ -4,7 +4,7 @@
 // Admin can change search SQLite file via /setfile
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { DB } from "https://deno.land/x/sqlite@v3.8/mod.ts";
+
 
 const TOKEN = Deno.env.get("BOT_TOKEN");
 const API = `https://api.telegram.org/bot${TOKEN}`;
@@ -520,3 +520,4 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
+
