@@ -1,81 +1,155 @@
 // main.ts
 // Telegram TMCELL Search Bot (Deno)
-// Features: Search in SQLite DB, user balances, referrals, promo codes, admin commands
+// Features: Search in SQLite DB, user balances (using Deno KV), referrals, promo codes, admin commands
 // Admin can change search SQLite file via /setfile
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-
+import { DB } from "https://deno.land/x/sqlite@v3.8/mod.ts";
 
 const TOKEN = Deno.env.get("BOT_TOKEN");
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper"; // Make sure this matches your webhook URL
 const SEARCH_DB_PATH = "VL2025.sqlite";
-const USER_DB_PATH = "users.db";
 const ADMIN_USER_ID = "7171269159";
 
-let searchDb: DB;
-let userDb: DB;
+// Fetch bot username at start
+const botInfoResponse = await fetch(`${API}/getMe`);
+const botInfo = await botInfoResponse.json();
+const botUsername = botInfo.result.username;
 
+const kv = await Deno.openKv();
+
+let searchDb: DB;
 try {
   searchDb = new DB(SEARCH_DB_PATH);
-  userDb = new DB(USER_DB_PATH);
 } catch (e) {
-  console.error("Failed to open databases:", e);
+  console.error("Failed to open search database:", e);
   Deno.exit(1);
 }
 
-// Create tables in user DB
-userDb.query(`
-  CREATE TABLE IF NOT EXISTS users (
-    user_id TEXT PRIMARY KEY,
-    username TEXT,
-    full_name TEXT,
-    balance INTEGER DEFAULT 0,
-    referrals INTEGER DEFAULT 0
-  )
-`);
-userDb.query(`
-  CREATE TABLE IF NOT EXISTS promo_codes (
-    code TEXT PRIMARY KEY,
-    value INTEGER,
-    max_usage INTEGER,
-    current_usage INTEGER,
-    used_by TEXT DEFAULT ''
-  )
-`);
+// Types
+type User = {
+  id: string;
+  username?: string;
+  full_name: string;
+  balance: number;
+  referrals: number;
+};
 
-// Symbols for encoding
+type PromoCode = {
+  code: string;
+  value: number;
+  max_usage: number;
+  current_usage: number;
+  used_by: string;
+};
+
+// User KV functions
+async function initUser(userId: string, username?: string, fullName?: string) {
+  const key = ["users", userId];
+  const res = await kv.get<User>(key);
+  if (!res.value) {
+    const user: User = {
+      id: userId,
+      username,
+      full_name: fullName || `ID:${userId}`,
+      balance: 1,
+      referrals: 0,
+    };
+    await kv.set(key, user);
+    return user;
+  } else {
+    const existing = res.value;
+    let changed = false;
+    if (username && username !== existing.username) {
+      existing.username = username;
+      changed = true;
+    }
+    if (fullName && fullName !== existing.full_name) {
+      existing.full_name = fullName;
+      changed = true;
+    }
+    if (changed) await kv.set(key, existing);
+    return existing;
+  }
+}
+
+async function getUser(userId: string): Promise<User | null> {
+  const res = await kv.get<User>(["users", userId]);
+  return res.value ?? null;
+}
+
+async function updateUser(userId: string, delta: Partial<User>) {
+  const existing = await getUser(userId) || await initUser(userId);
+  const newUser: User = {
+    ...existing,
+    username: delta.username ?? existing.username,
+    full_name: delta.full_name ?? existing.full_name,
+    balance: (existing.balance || 0) + (delta.balance ?? 0),
+    referrals: (existing.referrals || 0) + (delta.referrals ?? 0),
+    id: existing.id,
+  };
+  await kv.set(["users", userId], newUser);
+  return newUser;
+}
+
+async function registerUser(userId: string, username: string | undefined, fullName: string, referrerId: string | null = null) {
+  const user = await getUser(userId);
+  if (!user) {
+    await initUser(userId, username, fullName);
+    if (referrerId) {
+      await updateUser(referrerId, { balance: 1, referrals: 1 });
+    }
+  }
+}
+
+async function getBalance(userId: string): Promise<number> {
+  const user = await getUser(userId);
+  return user ? user.balance : 0;
+}
+
+async function getReferrals(userId: string): Promise<number> {
+  const user = await getUser(userId);
+  return user ? user.referrals : 0;
+}
+
+// Promo KV functions
+async function getPromo(code: string): Promise<PromoCode | null> {
+  const res = await kv.get<PromoCode>(["promo_codes", code]);
+  return res.value ?? null;
+}
+
+async function updatePromo(promo: PromoCode) {
+  await kv.set(["promo_codes", promo.code], promo);
+}
+
+async function createPromo(code: string, value: number, maxUsage: number, chatId: string) {
+  const existing = await getPromo(code);
+  if (existing) {
+    await sendMessage(chatId, "Bu promokod öňem bar.");
+    return;
+  }
+  const promo: PromoCode = {
+    code,
+    value,
+    max_usage: maxUsage,
+    current_usage: 0,
+    used_by: "",
+  };
+  await updatePromo(promo);
+  await sendMessage(chatId, `✅ Promokod <code>${code}</code> üstünlikli ýasaldy we ol ${value} bal berer. Maksimum ulanylyş sany: ${maxUsage}.`);
+}
+
+// Encoding functions
 const ENCODE_CHARS = "1234567890-=\\\\@$^&()+| ;'',./{}:\"<>abcdefghijklmnopqrstuvwxyzабвгдеёжзийклмнопрстуфхцчшщъыьэюяABCDEFGHIJKLMNOPQRSTUVWXYZАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ";
 const DECODE_CHARS = ")|;/4&.$2:''=,+^>9-0<3178(@\"{ 65}\\\\rёмlйnfфvчежbыoитлрhюузбmцxоkiдdьgwхщzэqпtpuвaшъeyяcгаjнсsкRЁМLЙNFФVЧЕЖBЫOИТЛРHЮУЗБMЦXОKIДDЬGWХЩZЭQПTPUВAШЪEYЯCГАJНСSК";
 
-// Encoding functions
 function encode(text: string): string {
   return [...text].map(c => ENCODE_CHARS.includes(c) ? DECODE_CHARS[ENCODE_CHARS.indexOf(c)] : c).join('');
 }
 
 function decode(text: string): string {
   return [...text].map(c => DECODE_CHARS.includes(c) ? ENCODE_CHARS[DECODE_CHARS.indexOf(c)] : c).join('');
-}
-
-// User functions
-function registerUser(userId: string, username: string | undefined, fullName: string, referrerId: string | null = null) {
-  const existing = userDb.query("SELECT * FROM users WHERE user_id = ?", [userId]);
-  if (existing.length === 0) {
-    userDb.query("INSERT INTO users (user_id, username, full_name, balance) VALUES (?, ?, ?, ?)", [userId, username || null, fullName, 1]);
-    if (referrerId) {
-      userDb.query("UPDATE users SET balance = balance + 1, referrals = referrals + 1 WHERE user_id = ?", [referrerId]);
-    }
-  }
-}
-
-function getBalance(userId: string): number {
-  const res = userDb.query("SELECT balance FROM users WHERE user_id = ?", [userId]);
-  return res.length > 0 ? res[0][0] as number : 0;
-}
-
-function getReferrals(userId: string): number {
-  const res = userDb.query("SELECT referrals FROM users WHERE user_id = ?", [userId]);
-  return res.length > 0 ? res[0][0] as number : 0;
 }
 
 // Search functions
@@ -129,7 +203,7 @@ function formatResult(row: any[]): string {
   );
 }
 
-// Keyboard menus
+// Menus
 function searchMenu() {
   return {
     inline_keyboard: [
@@ -211,8 +285,8 @@ function mainMenu() {
   };
 }
 
-// States for next step handlers
-const userStates: Map<string, { action: string, params?: any[] }> = new Map();
+// States
+const userStates: Record<string, { action: string; params?: any }> = {};
 
 // Telegram helpers
 async function sendMessage(chatId: string, text: string, options: any = {}): Promise<number | null> {
@@ -245,27 +319,25 @@ async function answerCallbackQuery(id: string, text = "", showAlert = false) {
 
 // Handle start
 async function handleStart(userId: string, username: string | undefined, fullName: string, referrerId: string | null, chatId: string) {
-  registerUser(userId, username, fullName, referrerId);
+  await registerUser(userId, username, fullName, referrerId);
   const text = "<b>Salam! TMCELL BOT-a hoş geldiňiz!</b>\n\n<b>TMCELL</b> tarapyndan üpjün edilen giňişleýin maglumat bazamyz bilen, islendik nomer hakda maglumatlary aňsatlyk bilen görüp bilersiňiz.\n\n<b>Ilkinji synanyşyk mugt!</b> Başlangyç üçin ýörite hödürlenýän mugt gözlegimiz bilen botumyzy barlap bilersiňiz. Has köp gözlemek isleseňiz, ballarymyzyň birini saýlap, satyn alyp bilersiňiz.\n\n<b>Dostlaryňyzy çagyryň we bal gazanyň!</b> Çagyrýan her bir dostuňyz üçin, gözleg etmek üçin 1 bal gazanyň.\n\n<b>Başlamak üçin aşakdaky wariantlardan birini saýlaň:</b>";
   await sendMessage(chatId, text, { reply_markup: mainMenu() });
 }
 
 // Process promo
 async function processPromoCode(userId: string, promoCode: string, chatId: string) {
-  const promoRes = userDb.query("SELECT * FROM promo_codes WHERE code = ? AND current_usage < max_usage", [promoCode]);
-  if (promoRes.length > 0) {
-    const promo = promoRes[0];
-    const usedBy = promo[4] as string;
-    if (usedBy.split(",").includes(userId)) {
+  const promo = await getPromo(promoCode);
+  if (promo && promo.current_usage < promo.max_usage) {
+    const usedByList = promo.used_by ? promo.used_by.split(",") : [];
+    if (usedByList.includes(userId)) {
       await sendMessage(chatId, "❌ <b>Bu promokody eýýäm ulandyňyz!</b>");
       return;
     }
-    const value = promo[1] as number;
-    userDb.query("UPDATE users SET balance = balance + ? WHERE user_id = ?", [value, userId]);
-    userDb.query("UPDATE promo_codes SET current_usage = current_usage + 1 WHERE code = ?", [promoCode]);
-    const newUsedBy = usedBy ? `${usedBy},${userId}` : userId;
-    userDb.query("UPDATE promo_codes SET used_by = ? WHERE code = ?", [newUsedBy, promoCode]);
-    await sendMessage(chatId, `✅ Üstünlikli! Size ${value} bal goşuldy.`);
+    await updateUser(userId, { balance: promo.value });
+    promo.current_usage += 1;
+    promo.used_by = [...usedByList, userId].join(",");
+    await updatePromo(promo);
+    await sendMessage(chatId, `✅ Üstünlikli! Size ${promo.value} bal goşuldy.`);
   } else {
     await sendMessage(chatId, "❌ <b>Promokod dynny ýa-da ýalňyş!</b>");
   }
@@ -273,15 +345,14 @@ async function processPromoCode(userId: string, promoCode: string, chatId: strin
 
 // Process search
 async function processSearch(userId: string, text: string, searchFunc: (q: string) => string[], chatId: string) {
-  const currentBalance = getBalance(userId);
+  const currentBalance = await getBalance(userId);
   if (currentBalance <= 0) {
     await sendMessage(chatId, "❌ <b>Balyňyz ýeterlik däl. Has köp bal satyn almaly.</b>");
     return;
   }
   const results = searchFunc(text);
   if (results.length > 0) {
-    const newBalance = currentBalance - 1;
-    userDb.query("UPDATE users SET balance = ? WHERE user_id = ?", [newBalance, userId]);
+    await updateUser(userId, { balance: -1 });
     for (const result of results) {
       await sendMessage(chatId, result);
     }
@@ -291,9 +362,9 @@ async function processSearch(userId: string, text: string, searchFunc: (q: strin
   }
 }
 
-// Handle payment callbacks
+// Handle payment
 async function handlePayment(callbackData: string, userId: string, chatId: string) {
-  const userBalance = getBalance(userId);
+  const userBalance = await getBalance(userId);
   let text = "";
   if (callbackData === "pay_payeer") {
     text = `🔹 Töleg ulgamy - Payeer 🔹\nHäzirki Balyňyz: ${userBalance}\n\n` +
@@ -317,9 +388,8 @@ async function handlePayment(callbackData: string, userId: string, chatId: strin
 
 // Handle account
 async function handleAccount(userId: string, username: string | undefined, fullName: string, chatId: string) {
-  const balance = getBalance(userId);
-  const referrals = getReferrals(userId);
-  const botUsername = (await (await fetch(`${API}/getMe`)).json()).result.username;
+  const balance = await getBalance(userId);
+  const referrals = await getReferrals(userId);
   const text = `🔹 <b>Ulanyjy maglumatlary</b> 🔹\n\n` +
                `<b>ID:</b> <code>${userId}</code>\n` +
                `<b>Ulanyjy ady:</b> <code>@${username || ''}</code>\n` +
@@ -347,14 +417,14 @@ async function handleBal(commandParams: string[], fromId: string, chatId: string
     await sendMessage(chatId, "Şeýle ýazt: /bal <user_id> <amount>");
     return;
   }
-  const userId = commandParams[1];
+  const targetUserId = commandParams[1];
   const amount = parseInt(commandParams[2]);
   if (isNaN(amount)) {
     await sendMessage(chatId, "Ýalňyş ýazdyň. Ine dogrysy: /bal <user_id> <amount>");
     return;
   }
-  userDb.query("UPDATE users SET balance = balance + ? WHERE user_id = ?", [amount, userId]);
-  await sendMessage(chatId, `✅ ${amount} ullanyja ${userId} bal berildi.`);
+  await updateUser(targetUserId, { balance: amount });
+  await sendMessage(chatId, `✅ ${amount} ullanyja ${targetUserId} bal berildi.`);
 }
 
 async function handleCreatePromo(commandParams: string[], fromId: string, chatId: string) {
@@ -373,13 +443,7 @@ async function handleCreatePromo(commandParams: string[], fromId: string, chatId
     await sendMessage(chatId, "Ýalňyş ýazdyň. Ine dogrysy: /create_promo <promokod> <bal> <näçe adam>");
     return;
   }
-  const existing = userDb.query("SELECT * FROM promo_codes WHERE code = ?", [promoCode]);
-  if (existing.length > 0) {
-    await sendMessage(chatId, "Bu promokod öňem bar.");
-    return;
-  }
-  userDb.query("INSERT INTO promo_codes (code, value, max_usage, current_usage) VALUES (?, ?, ?, ?)", [promoCode, value, maxUsage, 0]);
-  await sendMessage(chatId, `✅ Promokod <code>${promoCode}</code> üstünlikli ýasaldy we ol ${value} bal berer. Maksimum ulanylyş sany: ${maxUsage}.`);
+  await createPromo(promoCode, value, maxUsage, chatId);
 }
 
 // Handle setfile
@@ -389,12 +453,12 @@ async function handleSetFile(fromId: string, chatId: string) {
     return;
   }
   await sendMessage(chatId, "Send me the new SQLite file.");
-  userStates.set(fromId, { action: "waiting_sqlite" });
+  userStates[fromId] = { action: "waiting_sqlite" };
 }
 
-// Process uploaded file
+// Process file upload
 async function processFileUpload(fromId: string, document: any, chatId: string) {
-  if (fromId !== ADMIN_USER_ID || !userStates.has(fromId) || userStates.get(fromId)!.action !== "waiting_sqlite") {
+  if (fromId !== ADMIN_USER_ID || !userStates[fromId] || userStates[fromId].action !== "waiting_sqlite") {
     return;
   }
   const fileName = document.file_name;
@@ -411,48 +475,50 @@ async function processFileUpload(fromId: string, document: any, chatId: string) 
     searchDb.close();
     await Deno.writeFile(SEARCH_DB_PATH, new Uint8Array(fileData));
     searchDb = new DB(SEARCH_DB_PATH);
-    userStates.delete(fromId);
+    delete userStates[fromId];
     await sendMessage(chatId, "✅ Search DB successfully updated!");
   } catch (e) {
     console.error("File upload error:", e);
     await sendMessage(chatId, "Error updating DB.");
-    searchDb = new DB(SEARCH_DB_PATH); // Reopen old if failed
+    searchDb = new DB(SEARCH_DB_PATH); // Reopen old DB if failed
   }
 }
 
 // Callback handler
 async function handleCallbackQuery(callbackQuery: any) {
   const { from, message, data, id } = callbackQuery;
-  const userId = String(from.id);
-  const chatId = String(message.chat.id);
+  const userId = from.id.toString();
+  const chatId = message.chat.id.toString();
+  const username = from.username;
+  const fullName = from.first_name || username || userId;
 
   if (data === "start") {
-    await handleStart(userId, from.username, from.first_name || "", null, chatId);
+    await handleStart(userId, username, fullName, null, chatId);
   } else if (data === "buy_bal") {
     await sendMessage(chatId, "💱 <b>Töleg ulgamyny saýlaň:</b>", { reply_markup: paymentMenu() });
   } else if (["pay_payeer", "pay_yoomoney", "pay_binance", "pay_tmcell"].includes(data)) {
     await handlePayment(data, userId, chatId);
   } else if (data === "account") {
-    await handleAccount(userId, from.username, from.first_name || "", chatId);
+    await handleAccount(userId, username, fullName, chatId);
   } else if (data === "how_it_works") {
     await handleHowItWorks(chatId);
   } else if (data === "promo") {
     await sendMessage(chatId, "💡 <b>Promokod giriziň:</b>", { reply_markup: backToAmanoff() });
-    userStates.set(userId, { action: "process_promo" });
+    userStates[userId] = { action: "process_promo" };
   } else if (data === "search") {
     await sendMessage(chatId, "🔍 Gözleg üçin haýsy maglumatlary ulanmak isleýärsiňiz?", { reply_markup: searchMenu() });
   } else if (data === "search_number") {
     await sendMessage(chatId, "<b>Nomer saýlandy</b>.\n\n<b>Üns bilen okaň‼</b>\nNomeri +99361xxxxxx, 99361xxxxxx ýada 61xxxxxx görnüşinde ýazyň! 71-den başlaýan nomerlar kabul edilýär.\n\nNomer iberiň:");
-    userStates.set(userId, { action: "process_search", params: [searchNumber] });
+    userStates[userId] = { action: "process_search", params: searchNumber };
   } else if (data === "search_name") {
     await sendMessage(chatId, "<b>Ady giriziň:</b>");
-    userStates.set(userId, { action: "process_search", params: [searchName] });
+    userStates[userId] = { action: "process_search", params: searchName };
   } else if (data === "search_passport") {
     await sendMessage(chatId, "<b>Passport nomerini giriziň:</b>");
-    userStates.set(userId, { action: "process_search", params: [searchPassport] });
+    userStates[userId] = { action: "process_search", params: searchPassport };
   } else if (data === "search_address") {
     await sendMessage(chatId, "<b>Adres giriziň:</b>");
-    userStates.set(userId, { action: "process_search", params: [searchAddress] });
+    userStates[userId] = { action: "process_search", params: searchAddress };
   }
   await answerCallbackQuery(id);
 }
@@ -460,8 +526,8 @@ async function handleCallbackQuery(callbackQuery: any) {
 // Message handler
 async function handleMessage(message: any) {
   const { from, chat, text, document } = message;
-  const userId = String(from.id);
-  const chatId = String(chat.id);
+  const userId = from.id.toString();
+  const chatId = chat.id.toString();
   const username = from.username;
   const fullName = from.first_name || username || userId;
 
@@ -472,28 +538,28 @@ async function handleMessage(message: any) {
 
   if (!text) return;
 
-  if (userStates.has(userId)) {
-    const state = userStates.get(userId)!;
+  if (userStates[userId]) {
+    const state = userStates[userId];
     if (state.action === "process_promo") {
       await processPromoCode(userId, text.trim(), chatId);
     } else if (state.action === "process_search") {
-      const searchFunc = state.params![0] as (q: string) => string[];
+      const searchFunc = state.params as (q: string) => string[];
       await processSearch(userId, text, searchFunc, chatId);
     }
-    userStates.delete(userId);
+    delete userStates[userId];
     return;
   }
 
-  const command = text.trim().split(" ");
-  if (command[0].startsWith("/")) {
-    const cmd = command[0].slice(1);
+  const parts = text.trim().split(/\s+/);
+  const cmd = parts[0].startsWith("/") ? parts[0].slice(1) : "";
+  if (cmd) {
     if (cmd === "start") {
-      const referrerId = command[1] ? command[1] : null;
+      const referrerId = parts.length > 1 ? parts[1] : null;
       await handleStart(userId, username, fullName, referrerId, chatId);
     } else if (cmd === "bal") {
-      await handleBal(command, userId, chatId);
+      await handleBal(parts, userId, chatId);
     } else if (cmd === "create_promo") {
-      await handleCreatePromo(command, userId, chatId);
+      await handleCreatePromo(parts, userId, chatId);
     } else if (cmd === "setfile") {
       await handleSetFile(userId, chatId);
     }
@@ -520,4 +586,3 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
-
