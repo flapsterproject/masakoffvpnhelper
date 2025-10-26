@@ -2,15 +2,15 @@
 // Telegram Nakrutka Bot (Deno) - Simple version for boosting likes on posts
 // Features: Asks for post link, then number of likes, then simulates nakrutka
 // Notes: This is a simulation only; actual multi-like boosting requires multiple accounts or services, which may violate Telegram's terms.
-//        Requires BOT_TOKEN env var and Deno KV. Deploy as webhook at SECRET_PATH.
+// Requires BOT_TOKEN env var and Deno KV. Deploy as webhook at SECRET_PATH.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
-const SECRET_PATH = "/masakoffvpnhelper"; // make sure webhook path matches
-const BOT_USERNAME = "MasakoffVpnHelperBot"; // Adjust to your bot's username
+const SECRET_PATH = "/masakoffvpnhelper";  // make sure webhook path matches
+const BOT_USERNAME = "MasakoffVpnHelperBot";  // Adjust to your bot's username
 
 // Deno KV
 const kv = await Deno.openKv();
@@ -198,5 +198,6 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
+
 
 
