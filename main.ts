@@ -10,7 +10,7 @@ const TOKEN = Deno.env.get("BOT_TOKEN")!;
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const SECRET_PATH = "/masakoffvpnhelper; // make sure webhook path matches
-const BOT_USERNAME = "MasakoffVpnHelper"; // Adjust to your bot's username
+const BOT_USERNAME = "MasakoffVpnHelperBot"; // Adjust to your bot's username
 
 // Deno KV
 const kv = await Deno.openKv();
@@ -198,3 +198,4 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
+
