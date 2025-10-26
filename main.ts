@@ -9,8 +9,7 @@ import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 const TOKEN = Deno.env.get("BOT_TOKEN")!;
 if (!TOKEN) throw new Error("BOT_TOKEN env var is required");
 const API = `https://api.telegram.org/bot${TOKEN}`;
-const SECRET_PATH = "/masakoffvpnhelper";  // make sure webhook path matches
-const BOT_USERNAME = "MasakoffVpnHelperBot";  // Adjust to your bot's username
+const SECRET_PATH = "/masakoffvpnhelper"; // make sure webhook path matches
 
 // Deno KV
 const kv = await Deno.openKv();
@@ -51,43 +50,6 @@ async function sendMessage(chatId: string | number, text: string, options: any =
   }
 }
 
-// -------------------- Profile helpers --------------------
-type Profile = {
-  id: string;
-  username?: string;
-  displayName: string;
-  lastActive: number;
-};
-
-async function initProfile(userId: string, username?: string, displayName?: string): Promise<{ profile: Profile; isNew: boolean }> {
-  const key = ["profiles", userId];
-  const res = await kv.get(key);
-  if (!res.value) {
-    const profile: Profile = {
-      id: userId,
-      username,
-      displayName: displayName || `ID:${userId}`,
-      lastActive: Date.now(),
-    };
-    await kv.set(key, profile);
-    return { profile, isNew: true };
-  } else {
-    const existing = res.value as Profile;
-    let changed = false;
-    if (username && username !== existing.username) {
-      existing.username = username;
-      changed = true;
-    }
-    if (displayName && displayName !== existing.displayName) {
-      existing.displayName = displayName;
-      changed = true;
-    }
-    existing.lastActive = Date.now();
-    await kv.set(key, existing); // Always save to update lastActive
-    return { profile: existing, isNew: false };
-  }
-}
-
 // -------------------- Nakrutka handler --------------------
 async function handleNakrutkaInput(fromId: string, text: string) {
   const state = await getNakrutkaState(fromId);
@@ -122,7 +84,7 @@ async function handleNakrutkaInput(fromId: string, text: string) {
 }
 
 // -------------------- Commands --------------------
-async function handleCommand(fromId: string, username: string | undefined, displayName: string, text: string, isNew: boolean) {
+async function handleCommand(fromId: string, text: string) {
   if (text.startsWith("/start")) {
     await showHelp(fromId);
     return;
@@ -178,13 +140,9 @@ serve(async (req: Request) => {
       const from = msg.from;
       const text = (msg.text || "").trim();
       const fromId = String(from.id);
-      const username = from.username;
-      const displayName = from.first_name || from.username || fromId;
-
-      const { profile, isNew } = await initProfile(fromId, username, displayName);
 
       if (text.startsWith("/")) {
-        await handleCommand(fromId, username, displayName, text, isNew);
+        await handleCommand(fromId, text);
       } else if (await getNakrutkaState(fromId)) {
         await handleNakrutkaInput(fromId, text);
       } else {
@@ -198,6 +156,3 @@ serve(async (req: Request) => {
     return new Response("Error", { status: 500 });
   }
 });
-
-
-
